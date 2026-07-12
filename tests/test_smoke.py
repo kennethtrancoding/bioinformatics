@@ -18,6 +18,7 @@ from tests._isolation import REAL_ROOT  # noqa: F401  (must import first)
 
 import frontend  # noqa: E402
 from workflow.lib import api_registry, import_samples, jobs, preprocess  # noqa: E402
+from workflow.lib.utils import zip_directory  # noqa: E402
 from workflow.lib.bvbrc_client import BVBRCClient, _require_safe_identifier  # noqa: E402
 
 ROOT = Path(frontend.PROJECT_ROOT)  # temp root, see tests/_isolation
@@ -680,7 +681,7 @@ class TestLibraries(Base):
         d = ROOT / "data" / "ziptest"
         (d / "sub").mkdir(parents=True, exist_ok=True)
         (d / "sub" / "f.txt").write_text("hello")
-        buf = frontend._zip_directory(d, "ROOTNAME")
+        buf = zip_directory(d, "ROOTNAME")
         self.assertEqual(
             zipfile.ZipFile(buf).read("ROOTNAME/sub/f.txt"), b"hello"
         )
