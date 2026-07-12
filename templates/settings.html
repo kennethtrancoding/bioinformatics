@@ -9,37 +9,57 @@
 
 		<h1>API Settings</h1>
 		{% if not job_id %}
-		<p>API settings and credentials belong to one job. Look up a job on the Analysis page, then choose its “API Settings” link.</p>
+		<p>
+			API settings and credentials belong to one job. Look up a job on the Analysis page, then
+			press “API Settings”.
+		</p>
 		{% else %}
-		<p>Settings for job <code>{{ job_id }}</code>. The job ID is the authorization credential for these settings. Custom hosts must be approved by the deployer through <code>ALLOWED_API_HOSTS</code>.</p>
+		<p>Settings for job <code>{{ job_id }}</code></p>
 
-		{% if settings_saved %}<p class="notice">Settings saved.</p>{% endif %}
-		{% if login_error %}<p class="error-text">{{ login_error }}</p>{% endif %}
+		{% if settings_saved %}
+		<p class="notice">Settings saved.</p>
+		{% endif %} {% if login_error %}
+		<p class="error-text">{{ login_error }}</p>
+		{% endif %}
 
 		<form method="POST" action="{{ url_for('settings') }}">
 			<input type="hidden" name="job_id" value="{{ job_id }}" />
 			<fieldset>
 				<legend>BV-BRC Login</legend>
-				<p>Optional: enter credentials to add or replace this job's saved BV-BRC token — whether the job was created by upload or by bulk import. The password is sent only to the job's configured authentication endpoint and is not stored.</p>
+				<p>Enter credentials to replace this job's saved BV-BRC token.</p>
 				<label for="username">Username</label>
 				<input id="username" name="username" autocomplete="username" />
 				<label for="password">Password</label>
-				<input id="password" type="password" name="password" autocomplete="current-password" />
+				<input
+					id="password"
+					type="password"
+					name="password"
+					autocomplete="current-password" />
 			</fieldset>
 			<table class="status-table">
 				<thead>
-					<tr><th>Service</th><th>Endpoint URL</th><th>Used by</th><th>Purpose</th></tr>
+					<tr>
+						<th>Service</th>
+						<th>Endpoint URL</th>
+						<th>Used by</th>
+						<th>Purpose</th>
+					</tr>
 				</thead>
 				<tbody>
-					{% set ns = namespace(group="") %}
-					{% for ep in endpoints %}
-					{% if ep.group != ns.group %}
-					{% set ns.group = ep.group %}
-					<tr><th colspan="4">{{ ep.group }}</th></tr>
+					{% set ns = namespace(group="") %} {% for ep in endpoints %} {% if ep.group !=
+					ns.group %} {% set ns.group = ep.group %}
+					<tr>
+						<th colspan="4">{{ ep.group }}</th>
+					</tr>
 					{% endif %}
 					<tr>
-						<td><b>{{ ep.name }}</b>{% if ep.is_override %} <span class="badge degraded">custom</span>{% endif %}</td>
-						<td><input type="text" name="{{ ep.key }}" value="{{ ep.url }}" size="44" /></td>
+						<td>
+							<b>{{ ep.name }}</b>{% if ep.is_override %}
+							<span class="badge degraded">custom</span>{% endif %}
+						</td>
+						<td>
+							<input type="text" name="{{ ep.key }}" value="{{ ep.url }}" size="44" />
+						</td>
 						<td>{% if ep.wired %}Pipeline{% else %}Health-only{% endif %}</td>
 						<td>{{ ep.purpose }}</td>
 					</tr>
@@ -59,7 +79,13 @@
 		<p id="check-status"></p>
 		<table class="status-table" id="health-table" hidden>
 			<thead>
-				<tr><th>Service</th><th>Status</th><th>HTTP</th><th>Latency</th><th>Detail</th></tr>
+				<tr>
+					<th>Service</th>
+					<th>Status</th>
+					<th>HTTP</th>
+					<th>Latency</th>
+					<th>Detail</th>
+				</tr>
 			</thead>
 			<tbody></tbody>
 		</table>
@@ -68,8 +94,11 @@
 			var STATUS_LABEL = { up: "● Operational", degraded: "● Degraded", down: "● Down" };
 			function escapeHtml(value) {
 				return String(value === null || value === undefined ? "" : value)
-					.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
-					.replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+					.replaceAll("&", "&amp;")
+					.replaceAll("<", "&lt;")
+					.replaceAll(">", "&gt;")
+					.replaceAll('"', "&quot;")
+					.replaceAll("'", "&#39;");
 			}
 
 			function renderHealth(services, tableId) {
@@ -79,11 +108,29 @@
 				services.forEach(function (s) {
 					var row = document.createElement("tr");
 					row.innerHTML =
-						"<td><b>" + escapeHtml(s.name) + "</b> <small>(" + escapeHtml(s.group) + ")</small><br><small>" + escapeHtml(s.url) + "</small></td>" +
-						"<td><span class=\"badge " + (s.status === "up" || s.status === "down" || s.status === "degraded" ? s.status : "down") + "\">" + escapeHtml(STATUS_LABEL[s.status] || s.status) + "</span></td>" +
-						"<td>" + escapeHtml(s.code === null ? "—" : s.code) + "</td>" +
-						"<td>" + escapeHtml(s.latency_ms) + " ms</td>" +
-						"<td>" + escapeHtml(s.detail) + "</td>";
+						"<td><b>" +
+						escapeHtml(s.name) +
+						"</b> <small>(" +
+						escapeHtml(s.group) +
+						")</small><br><small>" +
+						escapeHtml(s.url) +
+						"</small></td>" +
+						'<td><span class="badge ' +
+						(s.status === "up" || s.status === "down" || s.status === "degraded"
+							? s.status
+							: "down") +
+						'">' +
+						escapeHtml(STATUS_LABEL[s.status] || s.status) +
+						"</span></td>" +
+						"<td>" +
+						escapeHtml(s.code === null ? "—" : s.code) +
+						"</td>" +
+						"<td>" +
+						escapeHtml(s.latency_ms) +
+						" ms</td>" +
+						"<td>" +
+						escapeHtml(s.detail) +
+						"</td>";
 					body.appendChild(row);
 				});
 				table.hidden = false;
@@ -93,12 +140,16 @@
 				var status = document.getElementById("check-status");
 				status.textContent = "Checking…";
 				fetch("{{ url_for('api_health', job_id=job_id) }}")
-					.then(function (r) { return r.json(); })
+					.then(function (r) {
+						return r.json();
+					})
 					.then(function (data) {
 						renderHealth(data.services, "health-table");
 						status.textContent = "Last checked just now.";
 					})
-					.catch(function () { status.textContent = "Health check failed to run."; });
+					.catch(function () {
+						status.textContent = "Health check failed to run.";
+					});
 			});
 		</script>
 		{% endif %}
