@@ -1,0 +1,12 @@
+name: blast
+channels:
+    - conda-forge
+    - bioconda
+    - defaults
+dependencies:
+    - blast>=2.12.0
+    - samtools>=1.15
+    # blast_ncbi.py runs inside this env (via $CONDA_PREFIX/bin/python3) to
+    # submit the remote BLASTP and parse results -- pin a python so it doesn't
+    # fall through PATH to an unrelated interpreter.
+    - python>=3.9

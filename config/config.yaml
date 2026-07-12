@@ -1,0 +1,86 @@
+# Bioinformatics Workflow Configuration
+# Automated genome analysis pipeline
+
+# Input/Output directories
+data_dir: "data/raw_fastq" # Location of paired-end FASTQ files (R1, R2)
+results_dir: "results" # Output directory for all results
+logs_dir: "logs" # Snakemake and tool logs
+
+# Sample manifest (CSV format)
+# Expected columns: isolate_id, R1_path, R2_path
+samples_manifest: "config/samples.csv"
+
+# BV-BRC Configuration
+bvbrc:
+    workspace_name: "bioinformatics_analysis"
+    api_base_url: "https://www.bv-brc.org/api"
+    # CLI fallback only. Web jobs override this with config/jobs/<job-id>/.bvbrc_token.
+    token_file: ".bvbrc_token"
+
+    # Comprehensive Genome Analysis parameters
+    assembly_method: "auto" # Options: auto (Unicycler), spades, kmer
+    organism_type: "bacteria"
+
+    # Job polling settings
+    poll_interval: 30 # seconds between status checks
+    max_wait_time: 7200 # max 2 hours for genome analysis
+
+# CARD RGI Configuration
+card:
+    output_format: "json" # json or txt
+    include_loose: false # Include loose hits
+
+# BLAST Configuration
+# Remote BLASTP of the resistance enzymes against NCBI nr: confirm global
+# novelty (no 100% match anywhere) and infer plasmid vs chromosome from the top
+# hits. NOT a re-BLAST against local CARD -- RGI already compared each hit
+# against CARD internally.
+blast:
+    database: "nr" # NCBI database to search remotely
+    evalue_threshold: 1e-5
+    max_target_seqs: 50
+    max_query_proteins: 0 # safety cap on enzymes submitted per sample (0 = no cap; all go in one remote job)
+    mechanism_filter: "antibiotic inactivation" # which RGI hits to BLAST (the tutorial's focus)
+
+# MLST Configuration
+mlst:
+    scheme: "auto" # Auto-detect species
+    ignore_missing: true
+
+# MobileElementFinder Configuration (known mobile-element catalog)
+# DTU CGE `mefinder`: aligns each assembly against MGEdb to catalog known MGEs
+# (insertion sequences, transposons, MITEs, ICEs, ...). No reference genome needed.
+# The db comes from PyPI at env-build time (see workflow/envs/mefinder.yml), so
+# rebuilds track the latest released MGEdb -- no static local db clone.
+mobile_elements:
+    threads: 4
+    # An antibiotic-resistance gene is called "mobile-element linked" when it
+    # overlaps a detected MGE or sits within this many bp of one on the same
+    # contig
+    colocation_proximity_bp: 5000
+
+# Database updates run once per day via scheduled job
+# (daily_update_databases.py) Timestamps are displayed on the frontend for
+# transparency
+databases:
+    update_packages: ["rgi", "MobileElementFinder"]
+
+# Resource limits
+resources:
+    max_parallel_samples: 4 # Process up to 4 genomes in parallel
+    memory_per_job_gb: 8
+    timeout_minutes: 180
+
+# Advanced options
+advanced:
+    skip_md5_check: false
+    verbose_logging: true
+    dry_run: false
+
+# Output report settings
+report:
+    html_template: true
+    include_phylogeny: true
+    novelty_thresholds:
+        coverage_min_pct: 80
+        identity_min_pct: 95 # < 95% identity = potentially novel variant

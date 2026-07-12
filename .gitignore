@@ -1,0 +1,73 @@
+# Snakemake
+.snakemake/
+*.smk.log
+dag.pdf
+dag.png
+dag.svg
+rulegraph.pdf
+rulegraph.png
+rulegraph.svg
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.pytest_cache/
+.coverage
+
+# Conda
+.conda/
+envs/*/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+.localized
+Thumbs.db
+
+# Project-specific
+.bvbrc_token
+results/*/
+data/raw_fastq/
+# Per-job runtime state: sample manifests, checksums, endpoint overrides, and
+# BV-BRC tokens written under config/jobs/<JOB_ID>/ at upload/run time. The
+# .bvbrc_token rule above only matched the token by basename; the manifest and
+# overrides sitting next to it were untracked by any rule.
+config/jobs/
+logs/
+*.txt.gz
+*.fastq.gz
+*.fasta.gz
+
+# Sensitive
+*.credentials
+*.env
+.env.local
+
+# Test/scratch files
+scratch_*.py
+*_test.py

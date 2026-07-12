@@ -1,0 +1,12 @@
+name: bvbrc
+channels:
+    - conda-forge
+    - defaults
+dependencies:
+    - python=3.11
+    - requests=2.31 # HTTP client for BV-BRC API
+    - pandas=2.0
+    - numpy=1.24
+    - pyyaml=6.0
+    - tqdm=4.65
+    - click=8.1

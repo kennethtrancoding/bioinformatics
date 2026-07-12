@@ -1,0 +1,7 @@
+name: mlst-arm64
+channels:
+    - conda-forge
+    - bioconda
+    - defaults
+dependencies:
+    - mlst>=2.19.0

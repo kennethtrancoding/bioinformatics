@@ -1,0 +1,106 @@
+<!doctype html>
+<html>
+	<head>
+		<title>API Settings</title>
+		<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+	</head>
+	<body>
+		<nav><a href="{{ url_for('analysis') }}">Analysis</a> | <b>API Settings</b></nav>
+
+		<h1>API Settings</h1>
+		{% if not job_id %}
+		<p>API settings and credentials belong to one job. Look up a job on the Analysis page, then choose its “API Settings” link.</p>
+		{% else %}
+		<p>Settings for job <code>{{ job_id }}</code>. The job ID is the authorization credential for these settings. Custom hosts must be approved by the deployer through <code>ALLOWED_API_HOSTS</code>.</p>
+
+		{% if settings_saved %}<p class="notice">Settings saved.</p>{% endif %}
+		{% if login_error %}<p class="error-text">{{ login_error }}</p>{% endif %}
+
+		<form method="POST" action="{{ url_for('settings') }}">
+			<input type="hidden" name="job_id" value="{{ job_id }}" />
+			<fieldset>
+				<legend>BV-BRC Login</legend>
+				<p>Optional: enter credentials to replace this job’s saved BV-BRC token. The password is sent only to the job’s configured authentication endpoint and is not stored.</p>
+				<label for="username">Username</label>
+				<input id="username" name="username" autocomplete="username" />
+				<label for="password">Password</label>
+				<input id="password" type="password" name="password" autocomplete="current-password" />
+			</fieldset>
+			<table class="status-table">
+				<thead>
+					<tr><th>Service</th><th>Endpoint URL</th><th>Used by</th><th>Purpose</th></tr>
+				</thead>
+				<tbody>
+					{% set ns = namespace(group="") %}
+					{% for ep in endpoints %}
+					{% if ep.group != ns.group %}
+					{% set ns.group = ep.group %}
+					<tr><th colspan="4">{{ ep.group }}</th></tr>
+					{% endif %}
+					<tr>
+						<td><b>{{ ep.name }}</b>{% if ep.is_override %} <span class="badge degraded">custom</span>{% endif %}</td>
+						<td><input type="text" name="{{ ep.key }}" value="{{ ep.url }}" size="44" /></td>
+						<td>{% if ep.wired %}Pipeline{% else %}Health-only{% endif %}</td>
+						<td>{{ ep.purpose }}</td>
+					</tr>
+					{% endfor %}
+				</tbody>
+			</table>
+			<button type="submit">Save settings</button>
+		</form>
+
+		<form method="POST" action="{{ url_for('settings_reset') }}">
+			<input type="hidden" name="job_id" value="{{ job_id }}" />
+			<button type="submit">Reset to defaults</button>
+		</form>
+
+		<h1>Service Status</h1>
+		<button id="check">Check all services</button>
+		<p id="check-status"></p>
+		<table class="status-table" id="health-table" hidden>
+			<thead>
+				<tr><th>Service</th><th>Status</th><th>HTTP</th><th>Latency</th><th>Detail</th></tr>
+			</thead>
+			<tbody></tbody>
+		</table>
+
+		<script>
+			var STATUS_LABEL = { up: "● Operational", degraded: "● Degraded", down: "● Down" };
+			function escapeHtml(value) {
+				return String(value === null || value === undefined ? "" : value)
+					.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;")
+					.replaceAll('"', "&quot;").replaceAll("'", "&#39;");
+			}
+
+			function renderHealth(services, tableId) {
+				var table = document.getElementById(tableId);
+				var body = table.querySelector("tbody");
+				body.innerHTML = "";
+				services.forEach(function (s) {
+					var row = document.createElement("tr");
+					row.innerHTML =
+						"<td><b>" + escapeHtml(s.name) + "</b> <small>(" + escapeHtml(s.group) + ")</small><br><small>" + escapeHtml(s.url) + "</small></td>" +
+						"<td><span class=\"badge " + (s.status === "up" || s.status === "down" || s.status === "degraded" ? s.status : "down") + "\">" + escapeHtml(STATUS_LABEL[s.status] || s.status) + "</span></td>" +
+						"<td>" + escapeHtml(s.code === null ? "—" : s.code) + "</td>" +
+						"<td>" + escapeHtml(s.latency_ms) + " ms</td>" +
+						"<td>" + escapeHtml(s.detail) + "</td>";
+					body.appendChild(row);
+				});
+				table.hidden = false;
+			}
+
+			document.getElementById("check").addEventListener("click", function () {
+				var status = document.getElementById("check-status");
+				status.textContent = "Checking…";
+				fetch("{{ url_for('api_health', job_id=job_id) }}")
+					.then(function (r) { return r.json(); })
+					.then(function (data) {
+						renderHealth(data.services, "health-table");
+						status.textContent = "Last checked just now.";
+					})
+					.catch(function () { status.textContent = "Health check failed to run."; });
+			});
+		</script>
+		{% endif %}
+	</body>
+</html>
