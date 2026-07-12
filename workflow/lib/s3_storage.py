@@ -21,6 +21,9 @@ from botocore.exceptions import ClientError
 
 _BUCKET = os.environ.get("RESULTS_S3_BUCKET")
 _PREFIX = os.environ.get("RESULTS_S3_PREFIX", "results").strip("/")
+# Raw uploads live under their own prefix so durable inputs never collide with
+# the results objects written under _PREFIX for the same job ID.
+_RAW_PREFIX = os.environ.get("RAW_S3_PREFIX", "raw").strip("/")
 _PRESIGN_EXPIRES_IN = int(os.environ.get("RESULTS_S3_PRESIGN_SECONDS", "300"))
 _client = boto3.client("s3") if _BUCKET else None
 
@@ -31,6 +34,10 @@ def is_enabled() -> bool:
 
 def key_for(job_id: str, *parts: str) -> str:
 	return "/".join([_PREFIX, job_id, *parts])
+
+
+def raw_key_for(job_id: str, *parts: str) -> str:
+	return "/".join([_RAW_PREFIX, job_id, *parts])
 
 
 def _zip_directory(directory: Path, arc_root: str) -> io.BytesIO:
@@ -78,6 +85,28 @@ def upload_job_results(job_id: str, results_dir: Path) -> None:
 		_client.upload_fileobj(
 			_zip_directory(results_dir, job_id), _BUCKET, key_for(job_id, f"{job_id}_results.zip")
 		)
+
+
+def upload_raw_file(job_id: str, file_path: Path) -> None:
+	"""Push one uploaded raw FASTQ to S3 for durable storage, keyed by its
+	basename under this job's raw prefix. The local copy the pipeline reads from
+	stays the source of truth, so callers are expected to swallow exceptions --
+	a failed backup must not fail the upload request or the pipeline run."""
+	if not is_enabled():
+		return
+	file_path = Path(file_path)
+	_client.upload_file(str(file_path), _BUCKET, raw_key_for(job_id, file_path.name))
+
+
+def delete_raw(job_id: str) -> None:
+	"""Delete every raw upload stored for a job. Best-effort; caller swallows."""
+	if not is_enabled():
+		return
+	paginator = _client.get_paginator("list_objects_v2")
+	for page in paginator.paginate(Bucket=_BUCKET, Prefix=raw_key_for(job_id, "")):
+		object_keys = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
+		if object_keys:
+			_client.delete_objects(Bucket=_BUCKET, Delete={"Objects": object_keys})
 
 
 def list_isolates(job_id: str) -> list:

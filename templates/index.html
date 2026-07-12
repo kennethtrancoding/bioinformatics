@@ -10,14 +10,15 @@
 			<a id="settings-link" href="{{ url_for('settings') }}">API Settings</a>
 		</nav>
 		<h1>Bioinformatic Analysis</h1>
+		<fieldset>
+			<h1>BV-BRC Login</h1>
+			<p>Used by both "Submit pair" and "Import folder" below — enter it once.</p>
+			<label for="username">Username:</label>
+			<input id="username" type="text" name="username" />
+			<label for="password">Password:</label>
+			<input id="password" type="password" name="password" />
+		</fieldset>
 		<form method="POST" action="/submit" enctype="multipart/form-data">
-			<fieldset>
-				<h1>BV-BRC Login</h1>
-				<label for="username">Username:</label>
-				<input id="username" type="text" name="username" />
-				<label for="password">Password:</label>
-				<input id="password" type="password" name="password" />
-			</fieldset>
 			<fieldset>
 				<h1>Paired FASTQ Files</h1>
 				<label for="fastq_file_1">R1</label>
@@ -203,8 +204,8 @@
 					// so, rather than claiming it is running when it has not started.
 					el.textContent = runStatus.queued
 						? "Queued (position " +
-						  runStatus.queue_position +
-						  ") — waiting for a free pipeline slot…"
+							runStatus.queue_position +
+							") — waiting for a free pipeline slot…"
 						: "Pipeline running…";
 					el.classList.remove("error-text");
 
@@ -397,6 +398,7 @@
 					var f = files[i];
 					formData.append("files", f, f.webkitRelativePath || f.name);
 				}
+
 				status.textContent =
 					"Uploading " +
 					files.length +
@@ -567,8 +569,8 @@
 						// /run returns 202 + queued when every slot is busy.
 						status.textContent = data.queued
 							? "Queued (position " +
-							  data.queue_position +
-							  ") — waiting for a free pipeline slot…"
+								data.queue_position +
+								") — waiting for a free pipeline slot…"
 							: "Pipeline running…";
 						abortBtn.hidden = false;
 						abortBtn.disabled = false;
