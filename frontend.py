@@ -297,6 +297,13 @@ def _watch_pipeline(job_id, pipeline_process):
 			s3_storage.upload_job_results(job_id, job_results_dir(job_id))
 		except Exception as exception:
 			print(f"[s3] failed to upload results for job {job_id}: {exception}")
+		# The reads have now been processed, and the Snakemake cleanup rule has
+		# deleted the local raw FASTQ. Purge the S3 backup too so raw data is
+		# gone as soon as it is processed, matching the promise shown in the UI.
+		try:
+			s3_storage.delete_raw(job_id)
+		except Exception as exception:
+			print(f"[s3] failed to delete raw uploads for job {job_id}: {exception}")
 
 
 def _read_job_status(job_id):
@@ -348,9 +355,7 @@ def _job_snapshot(job_id):
 	run_status = None
 	with _pipeline_lock:
 		pipeline_process = _pipeline_processes.get(job_id)
-		queue_position = (
-			_pipeline_queue.index(job_id) + 1 if job_id in _pipeline_queue else None
-		)
+		queue_position = _pipeline_queue.index(job_id) + 1 if job_id in _pipeline_queue else None
 	if queue_position is not None:
 		# Admitted but not started. Not done, and deliberately has no started_at:
 		# the run hasn't begun, so there is no elapsed time to report yet.
@@ -469,6 +474,14 @@ def _expire_job_results(job_id, job_results_directory, current_time):
 	if expired_unviewed or expired_after_view:
 		BVBRCClient(job_id=job_id).destroy_token()
 		shutil.rmtree(job_results_directory, ignore_errors=True)
+		# A successful run's raw is already gone (deleted at processing time), but
+		# a failed run keeps its raw for re-runs; clear both the local copy and
+		# the S3 backup now that the whole job is being expired.
+		shutil.rmtree(job_data_dir(job_id), ignore_errors=True)
+		try:
+			s3_storage.delete_raw(job_id)
+		except Exception as exception:
+			print(f"[s3] failed to delete raw uploads for job {job_id}: {exception}")
 
 
 def _sweep_expired_results():
@@ -502,6 +515,28 @@ def _sweep_expired_results():
 				and current_time - token_path.stat().st_mtime >= _MAX_TTL_SECONDS
 			):
 				token_path.unlink(missing_ok=True)
+	# Likewise for the raw FASTQ of a job that was uploaded but never run: it has
+	# no result status, so _expire_job_results never touches it. Purge the local
+	# copy and its S3 backup once it has sat idle past the max TTL, skipping any
+	# job with a run in progress or queued.
+	if DATA_ROOT.is_dir():
+		with _pipeline_lock:
+			active_or_queued = set(_pipeline_processes) | set(_pipeline_queue)
+		for job_data_directory in DATA_ROOT.iterdir():
+			if not job_data_directory.is_dir():
+				continue
+			job_id = job_data_directory.name
+			if not is_valid_job_id(job_id) or job_id in active_or_queued:
+				continue
+			if job_status_path(job_id).is_file():
+				continue  # has a result status -- handled by _expire_job_results
+			if current_time - job_data_directory.stat().st_mtime < _MAX_TTL_SECONDS:
+				continue
+			shutil.rmtree(job_data_directory, ignore_errors=True)
+			try:
+				s3_storage.delete_raw(job_id)
+			except Exception as exception:
+				print(f"[s3] failed to delete raw uploads for job {job_id}: {exception}")
 
 
 def _retention_loop():
@@ -606,19 +641,11 @@ def submit():
 	if not first_fastq_upload or not second_fastq_upload:
 		return jsonify({"error": "Both files are required"}), 400
 
-	username = request.form.get("username", "").strip()
-	password = request.form.get("password", "").strip()
 	first_read_checksum = request.form.get("fastq_file_1_checksum", "").strip()
 	second_read_checksum = request.form.get("fastq_file_2_checksum", "").strip()
 
 	job_id = generate_job_id()
 
-	# Authenticate with BV-BRC before doing anything else
-	# Pass job_id to use job-specific API endpoint overrides if they exist
-	if username and password:
-		client = BVBRCClient(job_id=job_id)
-		if not client.login(username, password):
-			return jsonify({"error": "BV-BRC authentication failed"}), 401
 	data_dir = job_data_dir(job_id)
 	data_dir.mkdir(parents=True, exist_ok=True)
 
@@ -656,6 +683,14 @@ def submit():
 		str(r1_path.relative_to(PROJECT_ROOT)),
 		str(r2_path.relative_to(PROJECT_ROOT)),
 	)
+
+	# Back the verified raw reads up to S3. Best effort: the local copy is what
+	# the pipeline reads, so a failed upload must not fail the request.
+	for raw_path in (r1_path, r2_path):
+		try:
+			s3_storage.upload_raw_file(job_id, raw_path)
+		except Exception as exception:
+			print(f"[s3] failed to upload raw {raw_path.name} for job {job_id}: {exception}")
 
 	return jsonify(
 		{
@@ -710,6 +745,7 @@ def import_folder():
 		return jsonify({"error": "No files uploaded"}), 400
 
 	job_id = generate_job_id()
+
 	temporary_import_dir = Path(tempfile.mkdtemp(prefix="import_"))
 	try:
 		try:
@@ -746,6 +782,20 @@ def import_folder():
 		except Exception as exception:
 			return jsonify({"error": str(exception)}), 500
 		import_result["job_id"] = job_id
+
+		# Back the imported raw reads up to S3. import_directory has already
+		# discarded any checksum-failed pairs, so the job's data dir now holds
+		# exactly the FASTQs that entered the manifest. Best effort: the local
+		# copy is what the pipeline reads, so a failed upload must not fail the
+		# request.
+		for raw_path in sorted(job_data_dir(job_id).glob("*")):
+			if not raw_path.is_file():
+				continue
+			try:
+				s3_storage.upload_raw_file(job_id, raw_path)
+			except Exception as exception:
+				print(f"[s3] failed to upload raw {raw_path.name} for job {job_id}: {exception}")
+
 		return jsonify(import_result), 200
 	finally:
 		shutil.rmtree(temporary_import_dir, ignore_errors=True)
@@ -755,6 +805,15 @@ def import_folder():
 def run_pipeline():
 	job_id = request.form.get("job_id")
 	_job_or_400(job_id)
+
+	username = request.form.get("username", "").strip()
+	password = request.form.get("password", "").strip()
+
+	if username and password:
+		client = BVBRCClient(job_id=job_id)
+		if not client.login(username, password):
+			return jsonify({"error": "BV-BRC authentication failed"}), 401
+
 	if not job_samples_csv(job_id).exists():
 		return jsonify({"error": "Unknown job ID"}), 404
 
@@ -811,7 +870,9 @@ def abort_pipeline():
 
 		pipeline_process = _pipeline_processes.get(job_id)
 		if pipeline_process is None or pipeline_process.poll() is not None:
-			return jsonify({"error": "No pipeline run is currently in progress for this job ID"}), 409
+			return jsonify(
+				{"error": "No pipeline run is currently in progress for this job ID"}
+			), 409
 		_pipeline_aborted_jobs.add(job_id)
 	try:
 		os.killpg(os.getpgid(pipeline_process.pid), signal.SIGTERM)
@@ -865,7 +926,9 @@ def view_result(job_id, isolate_id):
 		if report_path.is_file():
 			report_html = report_path.read_bytes()
 	if report_html is None:
-		report_html = s3_storage.get_object_bytes(s3_storage.key_for(job_id, isolate_id, "report.html"))
+		report_html = s3_storage.get_object_bytes(
+			s3_storage.key_for(job_id, isolate_id, "report.html")
+		)
 	if report_html is None:
 		abort(404)
 	response = Response(report_html, mimetype="text/html")
