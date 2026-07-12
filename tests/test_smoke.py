@@ -145,24 +145,6 @@ class TestSubmit(Base):
         )
         self.assertEqual(r.status_code, 200)
 
-    def test_bad_bvbrc_credentials_rejected(self):
-        real = BVBRCClient.login
-        BVBRCClient.login = lambda self, u, p: False
-        try:
-            r = self.client.post(
-                "/submit",
-                data={
-                    "fastq_file_1": (io.BytesIO(fastq_bytes()), "SAMPD_R1_001.fastq.gz"),
-                    "fastq_file_2": (io.BytesIO(fastq_bytes()), "SAMPD_R2_001.fastq.gz"),
-                    "username": "u",
-                    "password": "p",
-                },
-                content_type="multipart/form-data",
-            )
-            self.assertEqual(r.status_code, 401)
-        finally:
-            BVBRCClient.login = real
-
     def test_delete_removes_files_and_manifest_row(self):
         job_id = self.upload_pair("SAMPE").get_json()["job_id"]
         r = self.client.delete(
@@ -249,6 +231,21 @@ class TestPipelineLifecycle(Base):
         r = self.client.post("/run", data={"job_id": job_id})
         self.assertEqual(r.status_code, 401)
         self.assertIn("BV-BRC login required", r.get_json()["error"])
+
+    def test_run_bad_bvbrc_credentials_rejected(self):
+        # Credentials are authenticated at run time, not at upload time: a /run
+        # with a username/password that BV-BRC rejects is refused with a 401.
+        job_id = self.upload_pair("BADCRED").get_json()["job_id"]
+        real = BVBRCClient.login
+        BVBRCClient.login = lambda self, u, p: False
+        try:
+            r = self.client.post(
+                "/run", data={"job_id": job_id, "username": "u", "password": "p"}
+            )
+            self.assertEqual(r.status_code, 401)
+            self.assertIn("authentication failed", r.get_json()["error"].lower())
+        finally:
+            BVBRCClient.login = real
 
     def test_run_requires_samples(self):
         job_id = self.upload_pair("EMPTYJOB").get_json()["job_id"]
