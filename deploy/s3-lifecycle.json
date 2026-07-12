@@ -1,0 +1,11 @@
+{
+  "Rules": [
+    {
+      "ID": "expire-old-job-results",
+      "Filter": { "Prefix": "results/" },
+      "Status": "Enabled",
+      "Expiration": { "Days": 90 },
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
+    }
+  ]
+}
