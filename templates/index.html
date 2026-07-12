@@ -1,0 +1,612 @@
+<!doctype html>
+<html>
+	<head>
+		<title>Bioinformatic Analysis</title>
+		<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+	</head>
+	<body>
+		<nav>
+			<b>Analysis</b> |
+			<a id="settings-link" href="{{ url_for('settings') }}">API Settings</a>
+		</nav>
+		<h1>Bioinformatic Analysis</h1>
+		<form method="POST" action="/submit" enctype="multipart/form-data">
+			<fieldset>
+				<h1>BV-BRC Login</h1>
+				<label for="username">Username:</label>
+				<input id="username" type="text" name="username" />
+				<label for="password">Password:</label>
+				<input id="password" type="password" name="password" />
+			</fieldset>
+			<fieldset>
+				<h1>Paired FASTQ Files</h1>
+				<label for="fastq_file_1">R1</label>
+				<input type="file" name="fastq_file_1" allowed="fastq gz" />
+				<label for="fastq_file_2">R2</label>
+				<input type="file" name="fastq_file_2" allowed="fastq gz" />
+
+				<h1>Checksums</h1>
+				<label for="fastq_file_1">R1</label>
+				<input type="text" name="fastq_file_1_checksum" />
+				<label for="fastq_file_2">R2</label>
+				<input type="text" name="fastq_file_2_checksum" />
+
+				<button id="submit">Submit pair</button>
+			</fieldset>
+		</form>
+		<fieldset>
+			<h1>Bulk Import</h1>
+			<p>
+				Choose a sequencing-company dump from your computer. R1/R2 pairs are matched
+				automatically.
+			</p>
+			<label for="import-folder">Folder</label>
+			<input type="file" id="import-folder" webkitdirectory multiple />
+			<button id="import-btn">Import folder</button>
+			<p id="import-status"></p>
+		</fieldset>
+
+		<h1>Your Batch</h1>
+		<p id="job-banner">
+			Submit a pair or import a folder above to get a job ID. Save it; it's the only way to
+			come back and check on your results later. Raw data is deleted as soon as it's
+			processed; results are kept for 3 hours after they're first viewed.
+		</p>
+
+		<fieldset>
+			<h1>Check a job</h1>
+			<label for="lookup-job-id">Job ID</label>
+			<input type="text" id="lookup-job-id" placeholder="e.g. AB23CD45EF67" />
+			<button id="lookup-btn">Look up</button>
+			<p id="lookup-status"></p>
+		</fieldset>
+
+		<div id="job-view" hidden>
+			<p>
+				Job <code id="job-view-id"></code> —
+				<button id="run">Run Pipeline</button>
+				<button id="abort" hidden>Abort</button>
+				<span id="run-status"></span>
+			</p>
+
+			<h2>Samples</h2>
+			<table class="status-table" id="samples-table" hidden>
+				<thead>
+					<tr>
+						<th>Isolate ID</th>
+						<th>R1</th>
+						<th>R2</th>
+						<th></th>
+					</tr>
+				</thead>
+				<tbody></tbody>
+			</table>
+			<p id="samples-empty">No samples registered yet.</p>
+
+			<h2>Results</h2>
+			<div>
+				<button id="download-all-results">Download All Results</button>
+				<button id="download-master-report" hidden>Download Master Report</button>
+			</div>
+			<table class="status-table" id="results-table" hidden>
+				<thead>
+					<tr>
+						<th>Isolate ID</th>
+						<th>Mobile Elements</th>
+						<th>Actions</th>
+					</tr>
+				</thead>
+				<tbody></tbody>
+			</table>
+			<p id="results-empty">No results yet.</p>
+		</div>
+
+		<h1>Service Results</h1>
+		<p>
+			Status of every BV-BRC API the pipeline runs through. Auto-checked when a run finishes.
+			<a id="health-settings-link" href="{{ url_for('settings') }}">Configure endpoints</a>.
+		</p>
+		<button id="refresh-health">Refresh</button>
+		<p id="health-status"></p>
+		<table class="status-table" id="health-table" hidden>
+			<thead>
+				<tr>
+					<th>Service</th>
+					<th>Status</th>
+					<th>HTTP</th>
+					<th>Latency</th>
+					<th>Detail</th>
+				</tr>
+			</thead>
+			<tbody></tbody>
+		</table>
+
+		<script>
+			var STATUS_LABEL = { up: "● Operational", degraded: "● Degraded", down: "● Down" };
+
+			function escapeHtml(value) {
+				return String(value === null || value === undefined ? "" : value)
+					.replaceAll("&", "&amp;")
+					.replaceAll("<", "&lt;")
+					.replaceAll(">", "&gt;")
+					.replaceAll('"', "&quot;")
+					.replaceAll("'", "&#39;");
+			}
+
+			function loadHealth() {
+				var status = document.getElementById("health-status");
+				status.textContent = "Checking services…";
+				var healthUrl = "{{ url_for('api_health') }}";
+				if (currentJobId) healthUrl += "?job_id=" + encodeURIComponent(currentJobId);
+				return fetch(healthUrl)
+					.then(function (r) {
+						return r.json();
+					})
+					.then(function (data) {
+						var table = document.getElementById("health-table");
+						var body = table.querySelector("tbody");
+						body.innerHTML = "";
+						data.services.forEach(function (s) {
+							var row = document.createElement("tr");
+							row.innerHTML =
+								"<td><b>" +
+								escapeHtml(s.name) +
+								"</b> <small>(" +
+								escapeHtml(s.group) +
+								")</small><br><small>" +
+								escapeHtml(s.url) +
+								"</small></td>" +
+								'<td><span class="badge ' +
+								(s.status === "up" || s.status === "down" || s.status === "degraded"
+									? s.status
+									: "down") +
+								'">' +
+								escapeHtml(STATUS_LABEL[s.status] || s.status) +
+								"</span></td>" +
+								"<td>" +
+								escapeHtml(s.code === null ? "—" : s.code) +
+								"</td>" +
+								"<td>" +
+								escapeHtml(s.latency_ms) +
+								" ms</td>" +
+								"<td>" +
+								escapeHtml(s.detail) +
+								"</td>";
+							body.appendChild(row);
+						});
+						table.hidden = false;
+						status.textContent = "Last checked just now.";
+					})
+					.catch(function () {
+						status.textContent = "Health check failed to run.";
+					});
+			}
+
+			document.getElementById("refresh-health").addEventListener("click", loadHealth);
+			loadHealth();
+
+			function basename(p) {
+				return p ? p.split("/").pop() : "";
+			}
+
+			// Renders a run_status object ({done, success, error}) into a status
+			// element, making a crash impossible to mistake for "still running"
+			// or for success -- flagged in red, with whatever detail the server
+			// could pull from the pipeline log.
+			function showRunStatus(el, runStatus) {
+				let runPipelineButton = document.getElementById("run");
+				el.classList.remove("error-text");
+				runPipelineButton.hidden = false;
+
+				if (!runStatus.done) {
+					// A queued run is admitted but waiting for a free slot -- say
+					// so, rather than claiming it is running when it has not started.
+					el.textContent = runStatus.queued
+						? "Queued (position " +
+						  runStatus.queue_position +
+						  ") — waiting for a free pipeline slot…"
+						: "Pipeline running…";
+					el.classList.remove("error-text");
+
+					runPipelineButton.hidden = true;
+					return;
+				}
+				if (runStatus.success) {
+					el.textContent = "Pipeline complete.";
+					el.classList.remove("error-text");
+
+					runPipelineButton.hidden = true;
+					return;
+				}
+				el.textContent = runStatus.error
+					? "Pipeline CRASHED: " + runStatus.error
+					: "Pipeline CRASHED. Check the run log for details.";
+				el.classList.add("error-text");
+			}
+
+			// The job currently shown in the "Your Batch" panel -- whatever was
+			// last submitted/imported/looked up. All actions in that panel
+			// (Run, Download All, per-sample Delete) act on this job.
+			var currentJobId = null;
+			var runPollInterval = null;
+
+			function renderJob(jobId, data) {
+				currentJobId = jobId;
+				var settingsUrl = "/settings?job_id=" + encodeURIComponent(jobId);
+				document.getElementById("settings-link").href = settingsUrl;
+				document.getElementById("health-settings-link").href = settingsUrl;
+				document.getElementById("job-view").hidden = false;
+				document.getElementById("job-view-id").textContent = jobId;
+
+				var sTable = document.getElementById("samples-table");
+				var sBody = sTable.querySelector("tbody");
+				var sEmpty = document.getElementById("samples-empty");
+				sBody.innerHTML = "";
+				if (!data.samples.length) {
+					sTable.hidden = true;
+					sEmpty.hidden = false;
+				} else {
+					data.samples.forEach(function (s) {
+						var row = document.createElement("tr");
+						var f1 = basename(s.R1_path);
+						var f2 = basename(s.R2_path);
+						row.innerHTML =
+							"<td><b>" +
+							escapeHtml(s.isolate_id) +
+							"</b></td>" +
+							"<td><small>" +
+							escapeHtml(f1) +
+							"</small></td>" +
+							"<td><small>" +
+							escapeHtml(f2) +
+							"</small></td><td></td>";
+						var deleteButton = document.createElement("button");
+						deleteButton.textContent = "Delete";
+						deleteButton.addEventListener("click", function () {
+							deletePair(f1, f2, deleteButton);
+						});
+						row.lastElementChild.appendChild(deleteButton);
+						sBody.appendChild(row);
+					});
+					sTable.hidden = false;
+					sEmpty.hidden = true;
+				}
+
+				var rTable = document.getElementById("results-table");
+				var rBody = rTable.querySelector("tbody");
+				var rEmpty = document.getElementById("results-empty");
+				rBody.innerHTML = "";
+				if (!data.results.length) {
+					rTable.hidden = true;
+					rEmpty.hidden = false;
+				} else {
+					data.results.forEach(function (res) {
+						var row = document.createElement("tr");
+						var viewCell = res.has_report
+							? '<a href="/results/' +
+								jobId +
+								"/" +
+								encodeURIComponent(res.isolate_id) +
+								'/view" target="_blank">View Report</a>'
+							: "<span><small>No report yet</small></span>";
+						var mefCell = res.has_mobile_elements ? "✓" : "<small>—</small>";
+						row.innerHTML =
+							"<td><b>" +
+							escapeHtml(res.isolate_id) +
+							"</b></td>" +
+							"<td>" +
+							mefCell +
+							"</td>" +
+							"<td>" +
+							viewCell +
+							' &nbsp;|&nbsp; <a href="/results/' +
+							jobId +
+							"/" +
+							encodeURIComponent(res.isolate_id) +
+							'/download">Download</a></td>';
+						rBody.appendChild(row);
+					});
+					rTable.hidden = false;
+					rEmpty.hidden = true;
+				}
+
+				document.getElementById("download-master-report").hidden = !data.has_master_report;
+
+				var runStatus = document.getElementById("run-status");
+				var runBtn = document.getElementById("run");
+				var abortBtn = document.getElementById("abort");
+				if (runPollInterval) {
+					clearInterval(runPollInterval);
+					runPollInterval = null;
+				}
+				if (data.run_status) {
+					runBtn.disabled = !data.run_status.done;
+					abortBtn.hidden = data.run_status.done;
+					abortBtn.disabled = false;
+					showRunStatus(runStatus, data.run_status);
+					if (!data.run_status.done) {
+						pollRunStatus(jobId);
+					}
+				} else {
+					runBtn.disabled = false;
+					abortBtn.hidden = true;
+					runStatus.textContent = "";
+					runStatus.classList.remove("error-text");
+				}
+			}
+
+			function fetchJob(jobId) {
+				return fetch("/job/" + encodeURIComponent(jobId)).then(function (r) {
+					return r.json().then(function (d) {
+						return { ok: r.ok, status: r.status, d: d };
+					});
+				});
+			}
+
+			document.getElementById("lookup-btn").addEventListener("click", function () {
+				var jobId = document.getElementById("lookup-job-id").value.trim().toUpperCase();
+				var statusText = document.getElementById("lookup-status");
+				if (!jobId) {
+					status.textContent = "Enter a job ID first.";
+					return;
+				}
+				statusText.textContent = "Looking up…";
+
+				fetchJob(jobId)
+					.then(function (res) {
+						if (res.status === 429) {
+							statusText.textContent =
+								"Too many lookups; wait a moment and try again.";
+						} else if (res.status === 400 || res.status === 404) {
+							statusText.textContent = "Job not found.";
+						} else if (!res.ok) {
+							statusText.textContent = "Lookup failed to run.";
+						} else {
+							statusText.textContent = "";
+							renderJob(jobId, res.d);
+						}
+					})
+					.catch(function (error) {
+						statusText.textContent = "Lookup failed to run.";
+					});
+			});
+
+			document.getElementById("download-all-results").addEventListener("click", function () {
+				if (currentJobId) {
+					window.location = "/results/" + currentJobId + "/download-all";
+				}
+			});
+
+			document
+				.getElementById("download-master-report")
+				.addEventListener("click", function () {
+					if (currentJobId) {
+						window.location = "/results/" + currentJobId + "/master-report/download";
+					}
+				});
+
+			document.getElementById("import-btn").addEventListener("click", function () {
+				var status = document.getElementById("import-status");
+				var files = document.getElementById("import-folder").files;
+				if (!files.length) {
+					status.textContent = "Choose a folder first.";
+					return;
+				}
+				var formData = new FormData();
+				for (var i = 0; i < files.length; i++) {
+					var f = files[i];
+					formData.append("files", f, f.webkitRelativePath || f.name);
+				}
+				status.textContent =
+					"Uploading " +
+					files.length +
+					" file(s)… this can take a while for large dumps.";
+				fetch("{{ url_for('import_folder') }}", { method: "POST", body: formData })
+					.then(function (r) {
+						return r.json().then(function (d) {
+							return { ok: r.ok, d: d };
+						});
+					})
+					.then(function (res) {
+						if (!res.ok) {
+							status.textContent = "Error: " + res.d.error;
+							return;
+						}
+						var d = res.d;
+						var msg =
+							"Job ID: " +
+							d.job_id +
+							" — save this to check your results later. (" +
+							d.added.length +
+							" added, " +
+							d.updated.length +
+							" updated.";
+						if (d.checksum_source) {
+							msg +=
+								" Checksums (" +
+								d.checksum_source +
+								"): " +
+								d.verified.length +
+								" verified" +
+								(d.failed.length ? ", " + d.failed.length + " FAILED" : "") +
+								".";
+						}
+						if (d.skipped) {
+							msg += " " + d.skipped + " skipped (" + d.warnings.join("; ") + ")";
+						}
+						msg += ")";
+						status.textContent = msg;
+						fetchJob(d.job_id).then(function (res) {
+							if (res.ok) renderJob(d.job_id, res.d);
+						});
+					})
+					.catch(function () {
+						status.textContent = "Import failed to run.";
+					});
+			});
+		</script>
+		<script>
+			document.getElementById("submit").addEventListener("click", function (event) {
+				event.preventDefault();
+
+				var fileInput1 = document.querySelector('input[name="fastq_file_1"]');
+				var fileInput2 = document.querySelector('input[name="fastq_file_2"]');
+
+				var checksum1 = document
+					.querySelector('input[name="fastq_file_1_checksum"]')
+					.value.trim();
+				var checksum2 = document
+					.querySelector('input[name="fastq_file_2_checksum"]')
+					.value.trim();
+
+				if (fileInput1.files.length > 0 && fileInput2.files.length > 0) {
+					var file1 = fileInput1.files[0];
+					var file2 = fileInput2.files[0];
+
+					var formData = new FormData();
+					formData.append("fastq_file_1", file1);
+					formData.append("fastq_file_2", file2);
+					formData.append(
+						"username",
+						document.querySelector('input[name="username"]').value,
+					);
+					formData.append(
+						"password",
+						document.querySelector('input[name="password"]').value,
+					);
+					formData.append("fastq_file_1_checksum", checksum1);
+					formData.append("fastq_file_2_checksum", checksum2);
+
+					fetch("/submit", { method: "POST", body: formData })
+						.then((res) => res.json())
+						.then((data) => {
+							if (data.error) {
+								alert(data.error);
+								return;
+							}
+
+							document.getElementById("job-banner").textContent =
+								"Job ID: " +
+								data.job_id +
+								" — save this to check your results later.";
+							fetchJob(data.job_id).then(function (res) {
+								if (res.ok) renderJob(data.job_id, res.d);
+							});
+
+							fileInput1.value = "";
+							fileInput2.value = "";
+						});
+				} else {
+					alert("Please select both FASTQ files before submitting.");
+				}
+			});
+
+			function deletePair(f1, f2, btn) {
+				if (!currentJobId) return;
+				fetch("/delete", {
+					method: "DELETE",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ job_id: currentJobId, files: [f1, f2] }),
+				}).then(function () {
+					fetchJob(currentJobId).then(function (res) {
+						if (res.ok) renderJob(currentJobId, res.d);
+					});
+				});
+			}
+
+			function pollRunStatus(jobId) {
+				runPollInterval = setInterval(function () {
+					fetch("/status?job_id=" + encodeURIComponent(jobId))
+						.then(function (r) {
+							return r.json();
+						})
+						.then(function (data) {
+							if (data.error) {
+								clearInterval(runPollInterval);
+								runPollInterval = null;
+								return;
+							}
+							// Re-render every tick, not just at the end, so a queued
+							// run's position counts down live as slots free up.
+							showRunStatus(document.getElementById("run-status"), data);
+							if (data.done) {
+								clearInterval(runPollInterval);
+								runPollInterval = null;
+								document.getElementById("run").disabled = false;
+								document.getElementById("abort").hidden = true;
+								loadHealth();
+								fetchJob(jobId).then(function (res) {
+									if (res.ok) renderJob(jobId, res.d);
+								});
+							}
+						});
+				}, 3000);
+			}
+
+			document.getElementById("run").addEventListener("click", function () {
+				if (!currentJobId) return;
+				var btn = this;
+				var abortBtn = document.getElementById("abort");
+				var status = document.getElementById("run-status");
+
+				btn.disabled = true;
+
+				status.textContent = "Starting pipeline…";
+
+				var formData = new FormData();
+				formData.append("job_id", currentJobId);
+
+				fetch("/run", { method: "POST", body: formData })
+					.then((res) => res.json())
+					.then((data) => {
+						if (data.error) {
+							status.textContent = "Error: " + data.error;
+							btn.disabled = false;
+							return;
+						}
+						// /run returns 202 + queued when every slot is busy.
+						status.textContent = data.queued
+							? "Queued (position " +
+							  data.queue_position +
+							  ") — waiting for a free pipeline slot…"
+							: "Pipeline running…";
+						abortBtn.hidden = false;
+						abortBtn.disabled = false;
+						pollRunStatus(currentJobId);
+					})
+					.catch(() => {
+						status.textContent = "Failed to contact server.";
+						btn.disabled = false;
+					});
+			});
+
+			document.getElementById("abort").addEventListener("click", function () {
+				if (!currentJobId) return;
+				var btn = this;
+				var status = document.getElementById("run-status");
+
+				btn.disabled = true;
+				status.textContent = "Aborting…";
+
+				var formData = new FormData();
+				formData.append("job_id", currentJobId);
+
+				fetch("/abort", { method: "POST", body: formData })
+					.then((res) => res.json())
+					.then((data) => {
+						if (data.error) {
+							status.textContent = "Error: " + data.error;
+							btn.disabled = false;
+						}
+						// On success, leave the poll loop (already running from
+						// the Run click) to notice run_status.done and hide this
+						// button/re-enable Run once the process actually exits.
+					})
+					.catch(() => {
+						status.textContent = "Failed to contact server.";
+						btn.disabled = false;
+					});
+			});
+		</script>
+	</body>
+</html>

@@ -1,0 +1,104 @@
+"""
+Main Snakemake workflow for bioinformatic genome analysis pipeline.
+Orchestrates: QC → BV-BRC assembly → local analysis (CARD, BLAST, MLST) → reports
+"""
+
+import os
+import pandas as pd
+from pathlib import Path
+
+# ============================================================================
+# Configuration
+# ============================================================================
+
+configfile: "config/config.yaml"
+
+# Load sample manifest
+SAMPLES = {}
+if os.path.exists(config['samples_manifest']):
+    samples_dataframe = pd.read_csv(config['samples_manifest'])
+    SAMPLES = {sample_row['isolate_id']: sample_row for row_index, sample_row in samples_dataframe.iterrows()}
+    print(f"Loaded {len(SAMPLES)} samples")
+else:
+    print(f"Warning: Sample manifest not found: {config['samples_manifest']}")
+
+SAMPLE_IDS = list(SAMPLES.keys())
+
+
+# ============================================================================
+# Include Rule Files
+# ============================================================================
+
+include: "rules/setup.smk"
+include: "rules/qc.smk"
+include: "rules/bvbrc.smk"
+include: "rules/resistance.smk"
+include: "rules/blast.smk"
+include: "rules/mlst.smk"
+include: "rules/mobile_elements.smk"
+include: "rules/summary.smk"
+include: "rules/cleanup.smk"
+
+
+# ============================================================================
+# Final Targets
+# ============================================================================
+
+def get_all_outputs():
+    """Define all final outputs for the workflow."""
+    workflow_targets = []
+    
+    if not SAMPLE_IDS:
+        return workflow_targets
+    
+    for sample_id in SAMPLE_IDS:
+        # QC outputs
+        workflow_targets.append(f"{config['results_dir']}/{sample_id}/01_raw_qc/validation.txt")
+        
+        # BV-BRC outputs
+        workflow_targets.append(f"{config['results_dir']}/{sample_id}/02_assembly/assembly_contigs.fasta")
+        workflow_targets.append(f"{config['results_dir']}/{sample_id}/02_assembly/genome_report.json")
+        
+        # Resistance gene analysis (CARD RGI)
+        workflow_targets.append(f"{config['results_dir']}/{sample_id}/03_resistance/rgi_results.json")
+        
+        # Resistance protein FASTA (all RGI hits) + NCBI novelty BLAST results
+        # (summary CSV + the complete raw NCBI output, nothing discarded)
+        workflow_targets.append(f"{config['results_dir']}/{sample_id}/04_blast/rgi_proteins.fasta")
+        workflow_targets.append(f"{config['results_dir']}/{sample_id}/04_blast/blast_results.csv")
+        workflow_targets.append(f"{config['results_dir']}/{sample_id}/04_blast/blast_results_full.tsv")
+        
+        # MLST + Species identification
+        workflow_targets.append(f"{config['results_dir']}/{sample_id}/05_mlst/mlst_results.txt")
+        
+        # Summary report
+        workflow_targets.append(f"{config['results_dir']}/{sample_id}/summary/report.html")
+
+        # MobileElementFinder: known mobile-element catalog + AR-gene co-location
+        workflow_targets.append(f"{config['results_dir']}/{sample_id}/06_mobile_elements/me_summary.csv")
+        workflow_targets.append(f"{config['results_dir']}/{sample_id}/06_mobile_elements/{sample_id}_arg_mge_colocation.csv")
+
+        # Raw FASTQ deleted once nothing else needs it (see rules/cleanup.smk)
+        workflow_targets.append(f"{config['results_dir']}/{sample_id}/.raw_deleted")
+
+    # Master report: one CSV for the whole batch, not per-sample
+    workflow_targets.append(f"{config['results_dir']}/master_report.csv")
+
+    return workflow_targets
+
+
+rule all:
+    input:
+        get_all_outputs()
+    message:
+        "Workflow complete! All outputs generated."
+
+
+rule dag:
+    shell:
+        "snakemake --dag | dot -Tsvg > {config[results_dir]}/dag.svg"
+
+
+rule rulegraph:
+    shell:
+        "snakemake --rulegraph | dot -Tsvg > {config[results_dir]}/rulegraph.svg"

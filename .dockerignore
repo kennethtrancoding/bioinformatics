@@ -1,0 +1,11 @@
+data/
+results/
+logs/
+config/samples.csv
+config/jobs/
+config/api_endpoints.json
+.snakemake/
+.git/
+.bvbrc_token
+__pycache__/
+*.pyc
