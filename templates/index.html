@@ -402,7 +402,7 @@
 				status.textContent =
 					"Uploading " +
 					files.length +
-					" file(s)… this can take a while for large dumps.";
+					" file(s)… this can take a while for large folders.";
 				fetch("{{ url_for('import_folder') }}", { method: "POST", body: formData })
 					.then(function (r) {
 						return r.json().then(function (d) {
