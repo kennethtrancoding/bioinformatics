@@ -12,7 +12,7 @@
 		<h1>Bioinformatic Analysis</h1>
 		<fieldset>
 			<h1>BV-BRC Login</h1>
-			<p>Used by both "Submit pair" and "Import folder" below — enter it once.</p>
+
 			<label for="username">Username:</label>
 			<input id="username" type="text" name="username" />
 			<label for="password">Password:</label>
@@ -38,7 +38,7 @@
 		<fieldset>
 			<h1>Bulk Import</h1>
 			<p>
-				Choose a sequencing-company dump from your computer. R1/R2 pairs are matched
+				Choose a FASTQ folder directly from the sequencing company. R1/R2 pairs are matched
 				automatically.
 			</p>
 			<label for="import-folder">Folder</label>
@@ -51,7 +51,7 @@
 		<p id="job-banner">
 			Submit a pair or import a folder above to get a job ID. Save it; it's the only way to
 			come back and check on your results later. Raw data is deleted as soon as it's
-			processed; results are kept for 3 hours after they're first viewed.
+			processed; results are kept for 7 days, or 3 hours after they're first viewed.
 		</p>
 
 		<fieldset>
@@ -205,7 +205,7 @@
 					el.textContent = runStatus.queued
 						? "Queued (position " +
 							runStatus.queue_position +
-							") — waiting for a free pipeline slot…"
+							"); waiting for a free pipeline slot…"
 						: "Pipeline running…";
 					el.classList.remove("error-text");
 
@@ -418,7 +418,7 @@
 						var msg =
 							"Job ID: " +
 							d.job_id +
-							" — save this to check your results later. (" +
+							". Save this to check your results later. (" +
 							d.added.length +
 							" added, " +
 							d.updated.length +
@@ -490,7 +490,7 @@
 							document.getElementById("job-banner").textContent =
 								"Job ID: " +
 								data.job_id +
-								" — save this to check your results later.";
+								". Save this to check your results later.";
 							fetchJob(data.job_id).then(function (res) {
 								if (res.ok) renderJob(data.job_id, res.d);
 							});
@@ -570,7 +570,7 @@
 						status.textContent = data.queued
 							? "Queued (position " +
 								data.queue_position +
-								") — waiting for a free pipeline slot…"
+								"); waiting for a free pipeline slot…"
 							: "Pipeline running…";
 						abortBtn.hidden = false;
 						abortBtn.disabled = false;
