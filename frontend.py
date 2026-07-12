@@ -1,6 +1,5 @@
 import csv
 import hmac
-import io
 import json
 import os
 import re
@@ -10,7 +9,6 @@ import subprocess
 import tempfile
 import threading
 import time
-import zipfile
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -25,14 +23,13 @@ from flask import (
 	render_template,
 	request,
 	send_file,
-	send_from_directory,
 	url_for,
 )
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.utils import secure_filename
 
-from workflow.lib import api_registry, import_samples
+from workflow.lib import api_registry, import_samples, s3_storage
 from workflow.lib.bvbrc_client import BVBRCClient
 from workflow.lib.jobs import (
 	generate_job_id,
@@ -48,6 +45,7 @@ from workflow.lib.jobs import (
 	job_status_path,
 )
 from workflow.lib.preprocess import verify_file_md5
+from workflow.lib.utils import zip_directory
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
@@ -152,18 +150,6 @@ def _resolve_result_dir(job_id, isolate_id):
 	if not resolved_path.is_dir():
 		return None
 	return resolved_path
-
-
-def _zip_directory(directory, arc_root):
-	zip_buffer = io.BytesIO()
-	directory = Path(directory)
-	with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_archive:
-		for archive_file_path in directory.rglob("*"):
-			if archive_file_path.is_file():
-				archive_name = Path(arc_root) / archive_file_path.relative_to(directory)
-				zip_archive.write(archive_file_path, archive_name)
-	zip_buffer.seek(0)
-	return zip_buffer
 
 
 _CSV_FIELDS = ["isolate_id", "R1_path", "R2_path", "description"]
@@ -304,6 +290,13 @@ def _watch_pipeline(job_id, pipeline_process):
 		_drain_pipeline_queue()
 	# Token persists across reruns for the same job; destroyed when results
 	# are auto-deleted by the retention sweep, not immediately after each run.
+	if returncode == 0 and not aborted:
+		# Best effort: a failed upload must not affect the job's recorded
+		# status, and must not hold up draining the pipeline queue above.
+		try:
+			s3_storage.upload_job_results(job_id, job_results_dir(job_id))
+		except Exception as exception:
+			print(f"[s3] failed to upload results for job {job_id}: {exception}")
 
 
 def _read_job_status(job_id):
@@ -340,6 +333,11 @@ def _job_snapshot(job_id):
 					result_entry / "06_mobile_elements" / "me_summary.csv"
 				).is_file(),
 			}
+	if not results_by_isolate:
+		# Local results are gone (retention sweep, or a fresh instance after
+		# replacement) -- fall back to what was durably uploaded to S3.
+		for isolate_id in s3_storage.list_isolates(job_id):
+			results_by_isolate[isolate_id] = {"has_report": True, "has_mobile_elements": True}
 
 	started_at = None
 	try:
@@ -384,7 +382,8 @@ def _job_snapshot(job_id):
 			for isolate_id, isolate_result_info in results_by_isolate.items()
 		],
 		"run_status": run_status,
-		"has_master_report": (results_dir / "master_report.csv").is_file(),
+		"has_master_report": (results_dir / "master_report.csv").is_file()
+		or s3_storage.object_exists(s3_storage.key_for(job_id, "master_report.csv")),
 	}
 
 
@@ -856,13 +855,20 @@ def job_lookup(job_id):
 
 @app.route("/results/<job_id>/<isolate_id>/view")
 def view_result(job_id, isolate_id):
+	_job_or_400(job_id)
+	if not is_valid_isolate_id(isolate_id):
+		abort(404)
 	resolved_path = _resolve_result_dir(job_id, isolate_id)
-	if resolved_path is None:
+	report_html = None
+	if resolved_path is not None:
+		report_path = resolved_path / "summary" / "report.html"
+		if report_path.is_file():
+			report_html = report_path.read_bytes()
+	if report_html is None:
+		report_html = s3_storage.get_object_bytes(s3_storage.key_for(job_id, isolate_id, "report.html"))
+	if report_html is None:
 		abort(404)
-	report_dir = resolved_path / "summary"
-	if not (report_dir / "report.html").is_file():
-		abort(404)
-	response = send_from_directory(report_dir, "report.html")
+	response = Response(report_html, mimetype="text/html")
 	# Reports contain externally-derived text. Keep them inert even if a future
 	# report generator accidentally fails to escape a value.
 	response.headers["Content-Security-Policy"] = (
@@ -873,45 +879,69 @@ def view_result(job_id, isolate_id):
 
 @app.route("/results/<job_id>/<isolate_id>/download")
 def download_result(job_id, isolate_id):
-	resolved_path = _resolve_result_dir(job_id, isolate_id)
-	if resolved_path is None:
+	_job_or_400(job_id)
+	if not is_valid_isolate_id(isolate_id):
 		abort(404)
-	zip_buffer = _zip_directory(resolved_path, isolate_id)
-	return send_file(
-		zip_buffer,
-		mimetype="application/zip",
-		as_attachment=True,
-		download_name=f"{isolate_id}_results.zip",
+	resolved_path = _resolve_result_dir(job_id, isolate_id)
+	if resolved_path is not None:
+		zip_buffer = zip_directory(resolved_path, isolate_id)
+		return send_file(
+			zip_buffer,
+			mimetype="application/zip",
+			as_attachment=True,
+			download_name=f"{isolate_id}_results.zip",
+		)
+	download_url = s3_storage.presigned_download_url(
+		s3_storage.key_for(job_id, f"{isolate_id}_results.zip"),
+		filename=f"{isolate_id}_results.zip",
+		content_type="application/zip",
 	)
+	if download_url is None:
+		abort(404)
+	return redirect(download_url)
 
 
 @app.route("/results/<job_id>/download-all")
 def download_all_results(job_id):
 	_job_or_400(job_id)
 	results_dir = job_results_dir(job_id)
-	if not results_dir.is_dir():
-		abort(404)
-	zip_buffer = _zip_directory(results_dir, job_id)
-	return send_file(
-		zip_buffer,
-		mimetype="application/zip",
-		as_attachment=True,
-		download_name=f"{job_id}_results.zip",
+	if results_dir.is_dir() and any(results_dir.iterdir()):
+		zip_buffer = zip_directory(results_dir, job_id)
+		return send_file(
+			zip_buffer,
+			mimetype="application/zip",
+			as_attachment=True,
+			download_name=f"{job_id}_results.zip",
+		)
+	download_url = s3_storage.presigned_download_url(
+		s3_storage.key_for(job_id, f"{job_id}_results.zip"),
+		filename=f"{job_id}_results.zip",
+		content_type="application/zip",
 	)
+	if download_url is None:
+		abort(404)
+	return redirect(download_url)
 
 
 @app.route("/results/<job_id>/master-report/download")
 def download_master_report(job_id):
 	_job_or_400(job_id)
 	resolved_path = job_results_dir(job_id) / "master_report.csv"
-	if not resolved_path.is_file():
-		abort(404)
-	return send_file(
-		resolved_path,
-		mimetype="text/csv",
-		as_attachment=True,
-		download_name=f"{job_id}_master_report.csv",
+	if resolved_path.is_file():
+		return send_file(
+			resolved_path,
+			mimetype="text/csv",
+			as_attachment=True,
+			download_name=f"{job_id}_master_report.csv",
+		)
+	download_url = s3_storage.presigned_download_url(
+		s3_storage.key_for(job_id, "master_report.csv"),
+		filename=f"{job_id}_master_report.csv",
+		content_type="text/csv",
 	)
+	if download_url is None:
+		abort(404)
+	return redirect(download_url)
 
 
 if __name__ == "__main__":

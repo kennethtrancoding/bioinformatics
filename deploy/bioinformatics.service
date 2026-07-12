@@ -1,0 +1,46 @@
+## Runs the pipeline container under systemd so it restarts on crash and on
+## instance boot. Install on the EC2 host:
+##
+##   sudo cp deploy/bioinformatics.service /etc/systemd/system/
+##   sudo systemctl daemon-reload
+##   sudo systemctl enable --now bioinformatics
+##
+## Secrets/config live in /etc/bioinformatics/app.env on the host (not in
+## this repo) -- see the deployment guide for its contents.
+
+[Unit]
+Description=Bioinformatics pipeline web app
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Restart=always
+RestartSec=5
+TimeoutStartSec=120
+EnvironmentFile=/etc/bioinformatics/app.env
+
+# The image is built locally on this host (docker build), not pulled from a
+# registry -- so there is deliberately no `docker pull` here. A pull would fail
+# on a local-only tag, and a failing ExecStartPre aborts the whole unit.
+#
+# Named volumes hold in-flight job state (uploads, manifests, tokens, logs)
+# across container restarts and image upgrades; only finished results also
+# land in S3.
+ExecStartPre=-/usr/bin/docker rm -f bioinformatics
+ExecStart=/usr/bin/docker run --name bioinformatics --rm \
+    -p 5001:5001 \
+    -e APP_PASSWORD \
+    -e SECRET_KEY \
+    -e RESULTS_S3_BUCKET \
+    -e MAX_CONCURRENT_PIPELINES \
+    -e PIPELINE_CORES \
+    -v bioinformatics-data:/app/data \
+    -v bioinformatics-results:/app/results \
+    -v bioinformatics-config:/app/config/jobs \
+    -v bioinformatics-logs:/app/logs \
+    ${IMAGE}
+ExecStop=/usr/bin/docker stop -t 30 bioinformatics
+
+[Install]
+WantedBy=multi-user.target

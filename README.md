@@ -159,6 +159,43 @@ Raw FASTQ files are deleted by Snakemake after QC and BV-BRC upload no longer
 need them. Finished job results are retained for 3 hours after the first
 terminal status lookup, unless the job has a `.pinned` marker.
 
+## Deployment (AWS EC2 + S3)
+
+The app is deployed as a Docker container on a single EC2 instance, with
+finished results pushed to S3 for durability.
+
+**It is a single-host design and cannot be scaled horizontally as written.** The
+pipeline queue and rate-limit counters live in one Gunicorn process's memory
+(see [Concurrent Runs](#concurrent-runs)), so `gunicorn.conf.py` pins
+`workers = 1`. Scale by moving to a bigger instance, not by adding app servers.
+
+Deployment assets live in [deploy/](deploy/):
+
+```text
+deploy/app.env.example          every environment variable the app reads
+deploy/ec2-user-data.sh         installs Docker + git at instance boot
+deploy/iam-policy-s3-results.json  least-privilege S3 access for the instance role
+deploy/s3-lifecycle.json        expires stored results after 90 days
+deploy/bioinformatics.service   systemd unit (restart on crash and on reboot)
+deploy/refresh-databases.sh     rebuilds the image to refresh CARD/MGEdb
+```
+
+The `Dockerfile` pre-builds all five per-rule Snakemake environments at image
+build time, so a fresh container never stalls on a Conda solve mid-run and two
+simultaneous jobs cannot race to create the same environment. The first build is
+slow for that reason.
+
+Results storage is controlled by `RESULTS_S3_BUCKET`. When it is set, a
+successful run's reports are uploaded to S3, and the view/download routes fall
+back to S3 once the local retention sweep removes the on-disk copy. When it is
+unset, the app is local-only and results are gone for good after the sweep — see
+[Results disappeared](#results-disappeared). Credentials come from the EC2
+instance's IAM role; the app never reads static AWS keys.
+
+Persist `data/`, `results/`, `config/jobs/`, and `logs/` on Docker volumes. They
+hold in-flight job state — uploads, sample manifests, BV-BRC tokens, and run
+logs — and a container restart without them loses any job that is mid-run.
+
 ## Direct Snakemake Usage
 
 Create a sample manifest with this header:
@@ -345,7 +382,8 @@ Retry with a clean Conda cache or build the specific env manually:
 conda env create -f workflow/envs/rgi.yml
 ```
 
-For production, the Dockerfile pre-builds the Snakemake envs at image build time.
+In production this should not happen at run time: the [Dockerfile](Dockerfile)
+pre-builds every per-rule env at image build time.
 
 ### A job says it is already in progress
 
@@ -362,9 +400,19 @@ from being overloaded by simultaneous users, not an error. Raise
 
 ### Results disappeared
 
-Finished jobs are pruned 3 hours after their terminal status is first viewed, or
-after 7 days. Download needed reports promptly. For demo jobs that should never
-expire, create:
+Local results are pruned 3 hours after their terminal status is first viewed, or
+after 7 days.
+
+On a deployment with `RESULTS_S3_BUCKET` set, this is mostly invisible: reports
+were uploaded to S3 when the run finished, and the view/download routes fall
+back to S3 automatically. Confirm with:
+
+```bash
+aws s3 ls s3://<BUCKET>/results/<JOB_ID>/
+```
+
+Without S3 configured, pruned results are gone permanently — download them
+promptly. For demo jobs that should never expire locally, create:
 
 ```bash
 touch results/<JOB_ID>/.pinned

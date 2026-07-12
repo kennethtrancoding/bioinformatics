@@ -1,119 +1,89 @@
-# Database Update Strategies
+# Database Updates
 
-This pipeline keeps RGI (CARD) and MobileElementFinder (MGEdb) databases fresh using one of two strategies, configurable in `config/config.yaml`:
+The pipeline depends on two reference databases:
 
-## Strategy 1: `fresh_on_every_run` (Always Latest)
+| Database  | Used by                | Comes from                                    |
+| --------- | ---------------------- | --------------------------------------------- |
+| **CARD**  | RGI (resistance genes) | the `rgi` package, `workflow/envs/rgi.yml`     |
+| **MGEdb** | MobileElementFinder    | the `MobileElementFinder` pip package, `workflow/envs/mefinder.yml` |
 
-**Config:**
+## How a database actually gets refreshed
+
+Both tools run inside **Snakemake's own per-rule Conda environments**, built
+from `workflow/envs/*.yml` and cached under `.snakemake/conda/<hash>/`. Neither
+tool is installed in the `bioinformatics` environment that runs Flask and
+Snakemake themselves.
+
+That single fact determines everything else here: **the only way to move a
+database version is to rebuild the per-rule environment that contains it.**
+Neither `rgi.yml` nor `mefinder.yml` pins a version, so a rebuild resolves to
+the current released package, and with it the current database.
+
+### Docker / EC2 (production)
+
+Rebuilding the image re-solves the per-rule environments, which is what pulls
+fresh CARD and MGEdb. `deploy/refresh-databases.sh` does exactly this and
+restarts the service; run it from cron:
+
+```bash
+sudo crontab -e
+# weekly, Sunday 03:00 -- pick a window when the job queue is empty, since the
+# restart drops any run currently in flight
+0 3 * * 0 /home/ec2-user/bioinformatics/deploy/refresh-databases.sh >> /var/log/bioinformatics-db-refresh.log 2>&1
+```
+
+### Local / CLI
+
+Delete the cached environment and let Snakemake rebuild it on the next
+`--use-conda` run:
+
+```bash
+snakemake --conda-cleanup-envs
+```
+
+Or rebuild one environment directly:
+
+```bash
+conda env create --force -f workflow/envs/rgi.yml
+```
+
+## Reproducible database versions
+
+Latest-on-rebuild is the default. If a study needs the *same* database across
+rebuilds, pin the package version in the env file — that pin is the only thing
+that makes a database version reproducible:
+
 ```yaml
-databases:
-    update_strategy: "fresh_on_every_run"
+# workflow/envs/mefinder.yml
+- pip:
+      - MobileElementFinder==1.0.3
 ```
 
-**Behavior:**
-- Reinstalls RGI and MobileElementFinder from PyPI before the first sample runs
-- Guarantees latest databases every pipeline invocation
-- Runs `pip install --upgrade --force-reinstall` for both packages
-
-**Pros:**
-- ✅ Always uses the newest CARD and MGEdb databases
-- ✅ No separate scheduling needed
-
-**Cons:**
-- ❌ Slower (pip reinstall overhead ~30-60 seconds per run)
-- ❌ Requires network access to PyPI on every run
-- ❌ May fail if PyPI is unreachable
-
-**Usage:**
-```bash
-snakemake --use-conda  # Will update databases before processing samples
-```
-
----
-
-## Strategy 2: `daily_check` (Efficient Caching) — **Default**
-
-**Config:**
 ```yaml
-databases:
-    update_strategy: "daily_check"
+# workflow/envs/rgi.yml
+- rgi=6.0.3
 ```
 
-**Behavior:**
-- Checks for database updates once per day via an external scheduled script
-- Pipeline runs use whatever databases are currently installed (fast)
-- Displays last-update timestamp on frontend for visibility
+## A note on `workflow/scripts/daily_update_databases.py`
 
-**Pros:**
-- ✅ Fast pipeline runs (no reinstall overhead)
-- ✅ Databases are reasonably fresh (~24 hour max lag)
-- ✅ Better for production workflows with many samples
+This script runs `pip install --upgrade rgi MobileElementFinder` against
+**whatever interpreter invokes it**, and writes a timestamp to
+`results/.db_update_info.json`.
 
-**Cons:**
-- ❌ Databases may lag by up to 24 hours
-- ❌ Requires setting up a scheduled job
+Because RGI and MobileElementFinder live in Snakemake's per-rule environments
+(see above), that `pip install` targets an interpreter the pipeline never calls.
+It will report success while changing nothing the analysis actually uses. The
+timestamp it writes is not read anywhere — the frontend does not display it.
 
-**Setup Instructions:**
+**Do not rely on this script to keep databases current.** Use the rebuild path
+above. The script is left in place because it is harmless and may still be
+useful if you ever install the tools into the base environment directly.
 
-### Option A: System Cron
-Add to crontab (runs daily at 2 AM):
-```bash
-crontab -e
-# Add this line:
-0 2 * * * cd /Users/KennethTran/Desktop/bioinformatics && python3 workflow/scripts/daily_update_databases.py >> logs/daily_update.log 2>&1
-```
+## Technical details
 
-### Option B: Claude Code Schedule (Recommended)
-Run from your Claude Code session:
-```bash
-/schedule "daily_update_databases.py" --cron "0 2 * * *"
-```
-
-This creates a managed cloud agent that runs daily at 2 AM UTC.
-
-### Option C: Manual
-Run anytime to update databases:
-```bash
-python3 workflow/scripts/daily_update_databases.py
-```
-
-**Checking Last Update:**
-The frontend displays the last update timestamp from `results/.db_update_info.json`:
-```json
-{
-  "last_updated_utc": "2026-02-15T02:15:30.123456",
-  "strategy": "daily_check",
-  "packages": ["rgi", "MobileElementFinder"]
-}
-```
-
----
-
-## Switching Strategies
-
-To switch strategies, edit `config/config.yaml`:
-```yaml
-databases:
-    update_strategy: "daily_check"  # or "fresh_on_every_run"
-```
-
-Changes take effect on the next pipeline run.
-
----
-
-## Technical Details
-
-- **Setup Rule:** `workflow/rules/setup.smk`
-  - Reads `config.databases.update_strategy`
-  - `fresh_on_every_run`: Runs `pip install --upgrade --force-reinstall`
-  - `daily_check`: Creates flag immediately (actual updates via external script)
-
-- **Database Dependencies:**
-  - RGI rule (`card_rgi_analysis`) depends on `results/.databases_fresh`
-  - Mobile elements rule (`mobile_element_finder`) depends on `results/.databases_fresh`
-  - Both rules wait for flag before running
-
-- **Update Script:** `workflow/scripts/daily_update_databases.py`
-  - Runs independently of the pipeline
-  - Records timestamp to `results/.db_update_info.json`
-  - Used by frontend to display "DBs last updated: ..."
+- `workflow/rules/setup.smk` declares `rule setup_fresh_databases`, which the
+  RGI and MobileElementFinder rules depend on. It only `touch`es the marker file
+  `results/<JOB_ID>/.databases_fresh` — it performs no update and branches on no
+  configuration. It exists to give those two rules a common ordering dependency.
+- `config/config.yaml`'s `databases.update_packages` list is informational; no
+  rule reads it.
