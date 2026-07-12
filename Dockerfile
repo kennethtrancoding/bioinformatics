@@ -14,7 +14,7 @@
 # Run:
 #   docker run -d --name bioinformatics -p 5001:5001 \
 #     -e APP_PASSWORD=... -e SECRET_KEY=$(openssl rand -hex 32) \
-#     -e RESULTS_S3_BUCKET=your-bucket \
+#     -e RESULTS_S3_BUCKET=kennethtrancoding-bioinformatics-bucket \
 #     -v bioinformatics-data:/app/data \
 #     -v bioinformatics-results:/app/results \
 #     -v bioinformatics-config:/app/config/jobs \
@@ -32,15 +32,29 @@ FROM condaforge/miniforge3:24.9.2-0
 
 WORKDIR /app
 
-# Conda solves are the slowest and least-often-changed part of the build, so
-# they get their own layer, cached across app-code-only rebuilds.
+# Conda solves are the slowest and least-often-changed part of the build, so the
+# layers below are ordered least- to most-frequently-changed. This one is keyed
+# on just the two dependency files, so it survives any change to the rest of the
+# tree -- including the per-rule env specs.
 COPY workflow/envs/bioinformatics.yml workflow/envs/bioinformatics.yml
 COPY requirements.txt requirements.txt
 RUN mamba env create -f workflow/envs/bioinformatics.yml \
     && conda run -n bioinformatics pip install --no-cache-dir -r requirements.txt \
     && mamba clean -afy
 
-COPY . .
+# Only the files Snakemake parses to resolve the DAG, so that editing app code
+# (frontend.py, templates/, workflow/lib/) does not invalidate the expensive
+# env pre-build below. Everything else arrives in the COPY . . after it.
+#   Snakefile      -- the workflow itself
+#   rules/         -- include:d, and carry the conda: directives
+#   envs/          -- the env specs those directives point at
+#   scripts/       -- rules declare script:, which must resolve at parse time
+#   config.yaml    -- configfile:
+COPY workflow/Snakefile workflow/Snakefile
+COPY workflow/rules/ workflow/rules/
+COPY workflow/envs/ workflow/envs/
+COPY workflow/scripts/ workflow/scripts/
+COPY config/config.yaml config/config.yaml
 
 # Pre-build the per-rule envs against a throwaway job so Snakemake's content
 # hash lookup (.snakemake/conda/<hash>/) is already warm before real traffic
@@ -60,6 +74,12 @@ RUN set -eux; \
                   results_dir=results/IMGBUILD0001; \
     rm -rf config/jobs/IMGBUILD0001 results/IMGBUILD0001 /tmp/imgbuild; \
     mamba clean -afy
+
+# Last, so a code-only change rebuilds just this layer and reuses every conda
+# env above. Safe to re-copy workflow/ and config/ over themselves: .snakemake/
+# (which holds the envs the pre-build just created) is in .dockerignore, so this
+# cannot clobber the warmed cache.
+COPY . .
 
 ENV PORT=5001
 EXPOSE 5001

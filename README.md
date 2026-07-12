@@ -408,7 +408,7 @@ were uploaded to S3 when the run finished, and the view/download routes fall
 back to S3 automatically. Confirm with:
 
 ```bash
-aws s3 ls s3://<BUCKET>/results/<JOB_ID>/
+aws s3 ls s3://kennethtrancoding-bioinformatics-bucket/results/<JOB_ID>/
 ```
 
 Without S3 configured, pruned results are gone permanently — download them
