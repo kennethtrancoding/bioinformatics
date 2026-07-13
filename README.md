@@ -580,5 +580,5 @@ touch results/<JOB_ID>/.pinned
 
 Internal research project. Citation requested for publication use.
 
-Created by Kenneth Tran under Professor Xu Yang and California Polytechnic
+Created by Kenneth Tran under Professor Xu Yang at California Polytechnic
 University, Pomona.
