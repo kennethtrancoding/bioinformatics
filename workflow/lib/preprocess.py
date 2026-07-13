@@ -14,9 +14,7 @@ from workflow.lib.utils import compute_md5, setup_logger, load_json_safe
 logger = setup_logger("preprocess")
 
 
-# ============================================================================
 # FASTQ Validation
-# ============================================================================
 
 
 def is_gzipped_fastq(file_path: str) -> bool:
@@ -50,14 +48,14 @@ def count_fastq_records(file_path: str, sample_size: int = 1000) -> int:
 		line_count = 0
 		with open_func(file_path, "rt") as file_handle:
 			for line_index, fastq_line in enumerate(file_handle):
-				if line_index >= sample_size * 4:  # Sample first N*4 lines
+				if line_index >= sample_size * 4:
 					break
 				line_count += 1
 
 		estimated_total = (line_count // 4) if line_count > 0 else 0
 		return (
 		 estimated_total if estimated_total == 0 else int((estimated_total / sample_size) * 1e5)
-		)  # Rough estimate
+		)
 	except Exception as exception:
 		logger.error(f"Failed to count FASTQ records in {file_path}: {exception}")
 		return -1
@@ -86,7 +84,7 @@ def validate_fastq_integrity(file_path: str) -> Tuple[bool, str]:
 			line_count = 0
 			for fastq_line in file_handle:
 				line_count += 1
-				if line_count > 100000:  # Check first 100k lines for speed
+				if line_count > 100000:
 					break
 
 			if line_count % 4 != 0:
@@ -100,9 +98,7 @@ def validate_fastq_integrity(file_path: str) -> Tuple[bool, str]:
 		return False, f"Unexpected error: {exception}"
 
 
-# ============================================================================
 # MD5 Verification
-# ============================================================================
 
 
 def load_md5_checksums(checksum_file: str) -> Dict[str, str]:
@@ -123,7 +119,7 @@ def load_md5_checksums(checksum_file: str) -> Dict[str, str]:
 				checksum_parts = fastq_line.strip().split()
 				if len(checksum_parts) >= 2:
 					md5_hash = checksum_parts[0]
-					filename = checksum_parts[1].lstrip("*")  # Remove leading * if binary mode
+					filename = checksum_parts[1].lstrip("*")
 					checksums[filename] = md5_hash
 	except FileNotFoundError:
 		logger.error(f"Checksum file not found: {checksum_file}")
@@ -157,9 +153,7 @@ def verify_file_md5(file_path: str, expected_md5: str) -> Tuple[bool, str]:
 		return False, f"Error computing MD5: {exception}"
 
 
-# ============================================================================
 # Sample Manifest
-# ============================================================================
 
 
 def load_sample_manifest(manifest_file: str) -> List[Dict[str, str]]:
@@ -214,18 +208,15 @@ def validate_sample_files(sample: Dict[str, str]) -> Tuple[bool, List[str]]:
 			validation_errors.append(f"Missing {read_type}")
 			continue
 
-  # Validate existence
 		if not Path(file_path).exists():
 			validation_errors.append(f"{read_type} not found: {file_path}")
 			continue
 
-  # Validate size
 		file_size = Path(file_path).stat().st_size
 		if file_size == 0:
 			validation_errors.append(f"{read_type} is empty: {file_path}")
 			continue
 
-  # Validate integrity
 		is_valid, validation_message = validate_fastq_integrity(file_path)
 		if not is_valid:
 			validation_errors.append(f"{read_type} integrity check failed: {validation_message}")
@@ -233,9 +224,7 @@ def validate_sample_files(sample: Dict[str, str]) -> Tuple[bool, List[str]]:
 	return len(validation_errors) == 0, validation_errors
 
 
-# ============================================================================
 # Report Generation
-# ============================================================================
 
 
 def generate_preprocess_report(sample_records: List[Dict[str, str]], output_file: str) -> bool:
@@ -282,7 +271,6 @@ def generate_preprocess_report(sample_records: List[Dict[str, str]], output_file
 
 
 if __name__ == "__main__":
- # Example usage
 	sample_manifest = load_sample_manifest("config/samples.csv")
 	for sample in sample_manifest:
 		is_valid, validation_errors = validate_sample_files(sample)

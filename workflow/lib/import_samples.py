@@ -38,7 +38,9 @@ STATS_XLSX_NAME = "DNA Sequencing Stats.xlsx"
 _SAMPLE_INDEX_RE = re.compile(r"_S\d+.*$")
 
 
-def _is_fastq(file_name):
+def is_fastq(file_name):
+	"""Shared with cloud_import, which uses it to decide what is worth pulling
+	out of a shared drive folder in the first place."""
 	return file_name.lower().endswith(_FASTQ_SUFFIX)
 
 
@@ -182,15 +184,14 @@ def pair_fastqs(directory, recursive=False):
 	if not directory.is_dir():
 		raise NotADirectoryError(directory)
 
-	# Collect candidate files (top-level, or recursive if asked).
 	fastq_files_by_name = {}
 	if recursive:
 		for directory_entry in directory.rglob("*"):
-			if directory_entry.is_file() and _is_fastq(directory_entry.name):
+			if directory_entry.is_file() and is_fastq(directory_entry.name):
 				fastq_files_by_name.setdefault(directory_entry.name, directory_entry)
 	else:
 		for directory_entry in directory.iterdir():
-			if directory_entry.is_file() and _is_fastq(directory_entry.name):
+			if directory_entry.is_file() and is_fastq(directory_entry.name):
 				fastq_files_by_name[directory_entry.name] = directory_entry
 
 	pairs, warnings = [], []
@@ -201,7 +202,7 @@ def pair_fastqs(directory, recursive=False):
 			continue  # only iterate from the R1 side; R2 handled via its mate
 		mate_file_name = _R1_MARKER.sub(r"_R2\1", file_name, count=1)
 		if mate_file_name not in fastq_files_by_name:
-			warnings.append(f"No R2 mate for {file_name} (expected {mate_file_name}) — skipped.")
+			warnings.append(f"No R2 mate for {file_name} (expected {mate_file_name}; skipped.")
 			continue
 
 		isolate_id = _isolate_id(file_name)
@@ -249,15 +250,15 @@ def _read_existing(samples_csv):
 		return list(csv.DictReader(file_handle))
 
 
-def _copy_into(source_path, dest_dir):
+def _copy_into(source_path, dest_dir, move=False):
 	"""
 	Copy (or move) src into dest_dir, keeping its filename. Skips the copy when
 	the file is already there with the same size, so re-imports are fast and
 	idempotent. Returns the destination path (str).
 
 	`move` renames src into place instead of copying it — used for the web
-	upload path, where src already sits in a throwaway staging directory, so a
-	copy would needlessly double disk usage for large FASTQ dumps.
+	upload and cloud-import paths, where src already sits in a throwaway staging
+	directory, so a copy would needlessly double disk usage for large FASTQ dumps.
 	"""
 	source_path = Path(source_path)
 	dest_dir = Path(dest_dir)
@@ -267,7 +268,10 @@ def _copy_into(source_path, dest_dir):
 		return str(destination_path)
 	if destination_path.exists() and destination_path.stat().st_size == source_path.stat().st_size:
 		return str(destination_path)
-	shutil.copy2(source_path, destination_path)
+	if move:
+		shutil.move(str(source_path), str(destination_path))
+	else:
+		shutil.copy2(source_path, destination_path)
 	return str(destination_path)
 
 
@@ -277,13 +281,16 @@ def import_directory(
 	recursive=False,
 	dest_dir=None,
 	verify_checksums=True,
+	move=False,
 ):
 	"""
 	Pair FASTQs in `directory` and merge them into the sample manifest.
 
 	If `dest_dir` is given, each FASTQ is copied there (like the web upload) and
 	registered with a path relative to the project root; otherwise the files are
-	registered in place using their absolute paths.
+	registered in place using their absolute paths. Pass `move` when `directory`
+	is a throwaway staging tree the caller is about to delete anyway, to hand the
+	FASTQs over instead of duplicating them on disk.
 
 	When `verify_checksums` is set and a "DNA Sequencing Stats.xlsx" (the
 	sequencing company's stats workbook) sits in `directory`, each FASTQ's MD5 is
@@ -309,7 +316,7 @@ def import_directory(
 				# missing, so say so plainly instead of blaming the file.
 				warnings.append(
 					f"Found {stats_workbook_path.name} but openpyxl is not installed, so the "
-					f"checksum table could not be read — run 'pip install openpyxl' "
+					f"checksum table could not be read; run 'pip install openpyxl' "
 					f"to enable MD5 verification. Imported without checksum verification."
 				)
 			else:
@@ -317,8 +324,7 @@ def import_directory(
 					checksum_source_name = stats_workbook_path.name
 				else:
 					warnings.append(
-						f"Found {stats_workbook_path.name} but it has no readable R1/R2 md5sum "
-						f"columns — imported without checksum verification."
+						f"Found {stats_workbook_path.name} but it has no readable R1/R2 md5sum columns; imported without checksum verification."
 					)
 
 	manifest_rows = _read_existing(samples_csv)
@@ -332,10 +338,7 @@ def import_directory(
 		registered_paths = {"R1": fastq_pair["R1_path"], "R2": fastq_pair["R2_path"]}
 		if dest_dir:
 			registered_paths = {
-				read_label: _copy_into(
-					source_path,
-					dest_dir,
-				)
+				read_label: _copy_into(source_path, dest_dir, move=move)
 				for read_label, source_path in registered_paths.items()
 			}
 
@@ -353,7 +356,7 @@ def import_directory(
 
 		if mismatched_reads:
 			warnings.append(
-				f"Checksum mismatch for {fastq_pair['isolate_id']} ({', '.join(mismatched_reads)}) — not imported."
+				f"Checksum mismatch for {fastq_pair['isolate_id']} ({', '.join(mismatched_reads)}; not imported)."
 			)
 			failed.append(fastq_pair["isolate_id"])
 			# Remove copies we just made so a bad file isn't left behind.

@@ -6,6 +6,18 @@
       "Status": "Enabled",
       "Expiration": { "Days": 90 },
       "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 7 }
+    },
+    {
+      "ID": "expire-unrun-raw-uploads",
+      "Filter": {
+        "And": {
+          "Prefix": "raw/",
+          "Tags": [{ "Key": "raw-state", "Value": "unrun" }]
+        }
+      },
+      "Status": "Enabled",
+      "Expiration": { "Days": 7 },
+      "AbortIncompleteMultipartUpload": { "DaysAfterInitiation": 1 }
     }
   ]
 }

@@ -20,11 +20,14 @@ rule generate_master_report:
     """
     Generate CSV summary report for whole batch
     Integrates: isolate, species and percent confidence, mobile elements, beta lactamase proteins, antibiotic inactivation genes
+
+    Takes mefinder's call table ({sample}.csv), not me_summary.csv: the report names
+    the mobile elements, and the summary only counts them by type.
     """
     input:
         card = expand(f"{config['results_dir']}/{{sample}}/03_resistance/rgi_results.csv", sample=SAMPLE_IDS),
         mlst = expand(f"{config['results_dir']}/{{sample}}/05_mlst/mlst_results.json", sample=SAMPLE_IDS),
-        mobile_element_finder = expand(f"{config['results_dir']}/{{sample}}/06_mobile_elements/me_summary.csv", sample=SAMPLE_IDS),
+        mobile_element_finder = expand(f"{config['results_dir']}/{{sample}}/06_mobile_elements/{{sample}}.csv", sample=SAMPLE_IDS),
         colocation = expand(f"{config['results_dir']}/{{sample}}/06_mobile_elements/{{sample}}_arg_mge_colocation.json", sample=SAMPLE_IDS)
     params:
         sample_ids = SAMPLE_IDS

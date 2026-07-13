@@ -11,8 +11,8 @@ sys.path.insert(0, str(Path.cwd()))
 from workflow.lib.preprocess import validate_sample_files, count_fastq_records
 from workflow.lib.utils import compute_md5
 
-first_read_path = snakemake.params.first_read_path
-second_read_path = snakemake.params.second_read_path
+first_read_path = snakemake.input.first_read
+second_read_path = snakemake.input.second_read
 sample_id = snakemake.params.sample_id
 report_file = snakemake.output.report
 metadata_file = snakemake.output.metadata

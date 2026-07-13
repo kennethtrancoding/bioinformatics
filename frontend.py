@@ -1,6 +1,4 @@
-import csv
 import hmac
-import json
 import os
 import re
 import shutil
@@ -9,7 +7,6 @@ import subprocess
 import tempfile
 import threading
 import time
-from collections import deque
 from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlparse
@@ -27,24 +24,30 @@ from flask import (
 )
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 
-from workflow.lib import api_registry, import_samples, s3_storage
+from workflow.lib import api_registry, s3_storage
 from workflow.lib.bvbrc_client import BVBRCClient
+from workflow.lib.import_service import ImportService
+
+# Cloud import is disabled; these two are only needed by the commented-out
+# /cloud-import routes below.
+# from workflow.lib import cloud_import
+# from workflow.lib.import_service import CloudImportManager
+from workflow.lib.job_store import SAMPLE_FIELDS, JobStore
 from workflow.lib.jobs import (
 	generate_job_id,
 	is_valid_isolate_id,
 	is_valid_job_id,
 	job_data_dir,
-	job_first_viewed_path,
-	job_log_path,
-	job_pinned_path,
 	job_results_dir,
 	job_run_started_path,
 	job_samples_csv,
-	job_status_path,
 )
+from workflow.lib.pipeline_manager import PipelineManager
 from workflow.lib.preprocess import verify_file_md5
+from workflow.lib.retention import RetentionService
 from workflow.lib.utils import zip_directory
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -54,6 +57,24 @@ os.umask(0o077)
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY") or os.urandom(32)
+
+# Behind a reverse proxy (deploy/Caddyfile) every request reaches Flask from the
+# proxy's own address, which would collapse the per-IP rate limit below into one
+# bucket shared by all users. ProxyFix recovers the real client IP from
+# X-Forwarded-For. Trusting more hops than actually sit in front of us would let a
+# client forge that header and evade the limit, so this stays off unless the
+# deployment declares how many proxies it has.
+# `or 0` so a blank value (TRUSTED_PROXY_HOPS=) reads as "no proxy" rather than
+# crashing on int(""); systemd passes the variable through empty when app.env
+# declares it without a value.
+_TRUSTED_PROXY_HOPS = int(os.environ.get("TRUSTED_PROXY_HOPS") or 0)
+if _TRUSTED_PROXY_HOPS:
+	app.wsgi_app = ProxyFix(
+		app.wsgi_app,
+		x_for=_TRUSTED_PROXY_HOPS,
+		x_proto=_TRUSTED_PROXY_HOPS,
+		x_host=_TRUSTED_PROXY_HOPS,
+	)
 
 # Only the job-ID lookup is rate limited because job IDs grant access to results.
 # In-memory counters are sufficient while Gunicorn is restricted to one worker.
@@ -72,9 +93,9 @@ _APP_PASSWORD = os.environ.get("APP_PASSWORD")
 def _require_login():
 	"""Gate every route behind HTTP Basic Auth when APP_PASSWORD is configured."""
 	if not _APP_PASSWORD:
-		return  # auth disabled (local development)
+		return
 	if request.path == "/api/health":
-		return  # allow unauthenticated health checks for monitoring
+		return
 	basic_auth_credentials = request.authorization
 	if (
 		not basic_auth_credentials
@@ -104,9 +125,15 @@ def _reject_cross_site_mutations():
 def _security_headers(response):
 	response.headers.setdefault("X-Content-Type-Options", "nosniff")
 	response.headers.setdefault("X-Frame-Options", "DENY")
-	response.headers.setdefault("Referrer-Policy", "no-referrer")
+	# "same-origin", not "no-referrer": under no-referrer a browser sends
+	# "Origin: null" on a form-navigation POST even when it is same-origin (Fetch
+	# spec: a non-CORS POST from a no-referrer document gets an opaque origin), so
+	# the settings forms below would trip the cross-site check above. same-origin
+	# still strips the Referer entirely on cross-origin requests, which is what
+	# keeps the job ID in the query string from leaking off-site.
+	response.headers.setdefault("Referrer-Policy", "same-origin")
 	response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-	if request.path.startswith(("/job/", "/status", "/results/")):
+	if request.path.startswith(("/job/", "/status", "/results/", "/cloud-import")):
 		# Not setdefault: send_file/send_from_directory already stamp their own
 		# Cache-Control (a conditional "no-cache", meant for static assets) by
 		# the time this after_request hook runs, so setdefault would be a no-op
@@ -125,11 +152,47 @@ RESULTS_ROOT.mkdir(parents=True, exist_ok=True)
 MAX_CONCURRENT_PIPELINES = max(1, int(os.environ.get("MAX_CONCURRENT_PIPELINES", "2")))
 PIPELINE_CORES = max(1, int(os.environ.get("PIPELINE_CORES", "4")))
 
-# Gunicorn threads share these structures, so updates use one lock.
-_pipeline_lock = threading.Lock()
-_pipeline_processes = {}
-_pipeline_queue = deque()
-_pipeline_aborted_jobs = set()
+_job_store = JobStore()
+_pipeline_manager = PipelineManager(
+	_job_store,
+	s3_storage,
+	lambda: PROJECT_ROOT,
+	max_concurrent=MAX_CONCURRENT_PIPELINES,
+	cores=PIPELINE_CORES,
+	popen_module=subprocess,
+)
+# Compatibility aliases for operational tooling and the existing test suite.
+_pipeline_lock = _pipeline_manager.lock
+_pipeline_processes = _pipeline_manager.processes
+_pipeline_queue = _pipeline_manager.queue
+_pipeline_aborted_jobs = _pipeline_manager.aborted_jobs
+_expiring_jobs = _pipeline_manager.expiring_jobs
+
+
+def _persist_pipeline_queue():
+	_pipeline_manager.persist_queue()
+
+
+def _is_draining():
+	return _pipeline_manager.is_draining()
+
+
+# A job can be filled by several uploads, and by different methods at the same
+# time -- a folder import and a cloud pull can both be adding samples to one job
+# while the user drops a single pair on top. Every one of those is a
+# read-modify-write of the same samples.csv, so they take the job's lock: without
+# it two adds that overlap silently lose one of the two sets of samples.
+# Per-job, not global, so uploads to unrelated jobs still run in parallel.
+_job_locks_guard = threading.Lock()
+_job_locks = {}
+
+
+def _job_lock(job_id):
+	with _job_locks_guard:
+		return _job_locks.setdefault(job_id, threading.Lock())
+
+
+_import_service = ImportService(s3_storage, _job_store, lambda: PROJECT_ROOT, _job_lock)
 
 
 def _job_or_400(job_id):
@@ -152,173 +215,72 @@ def _resolve_result_dir(job_id, isolate_id):
 	return resolved_path
 
 
-_CSV_FIELDS = ["isolate_id", "R1_path", "R2_path", "description"]
+_CSV_FIELDS = SAMPLE_FIELDS
 
 
 def _read_samples(samples_csv):
-	samples_csv = Path(samples_csv)
-	if not samples_csv.exists():
-		return [], _CSV_FIELDS
-	with samples_csv.open(newline="") as file_handle:
-		reader = csv.DictReader(file_handle)
-		fieldnames = reader.fieldnames or _CSV_FIELDS
-		return list(reader), fieldnames
+	return _job_store.read_samples(samples_csv)
 
 
 def _write_samples(samples_csv, sample_rows, fieldnames=_CSV_FIELDS):
-	samples_csv = Path(samples_csv)
-	samples_csv.parent.mkdir(parents=True, exist_ok=True)
-	with samples_csv.open("w", newline="") as file_handle:
-		writer = csv.DictWriter(file_handle, fieldnames=fieldnames)
-		writer.writeheader()
-		writer.writerows(sample_rows)
+	_job_store.write_samples(samples_csv, sample_rows, fieldnames)
 
 
 def _upsert_sample(samples_csv, isolate_id, r1_path, r2_path):
-	sample_rows, fieldnames = _read_samples(samples_csv)
-	sample_rows = [
-		sample_row for sample_row in sample_rows if sample_row.get("isolate_id") != isolate_id
-	]
-	sample_rows.append(
-		{"isolate_id": isolate_id, "R1_path": r1_path, "R2_path": r2_path, "description": ""}
-	)
-	_write_samples(samples_csv, sample_rows, fieldnames)
+	_job_store.upsert_sample(Path(samples_csv).parent.name, isolate_id, r1_path, r2_path)
 
 
 def _remove_sample(samples_csv, isolate_id):
-	sample_rows, fieldnames = _read_samples(samples_csv)
-	_write_samples(
-		samples_csv,
-		[sample_row for sample_row in sample_rows if sample_row.get("isolate_id") != isolate_id],
-		fieldnames,
-	)
+	_job_store.remove_sample(Path(samples_csv).parent.name, isolate_id)
+
+
+def _read_uploads(job_id):
+	return _job_store.read_uploads(job_id)
+
+
+def _record_upload(job_id, method, started_at, added, updated):
+	return _job_store.record_upload(job_id, method, started_at, added, updated)
 
 
 def _extract_error_summary(log_path, max_chars=800):
-	"""Best-effort excerpt of the failure from a run's snakemake log, so a
-	crash reads as an actual explanation instead of a bare boolean."""
-	try:
-		log_text = log_path.read_text(errors="replace")
-	except OSError:
-		return None
-	error_start_index = log_text.rfind("Error in rule ")
-	if error_start_index == -1:
-		error_start_index = log_text.rfind("\nError")
-	if error_start_index == -1:
-		return None
-	return log_text[error_start_index : error_start_index + max_chars].strip()
+	return _pipeline_manager._extract_error_summary(log_path, max_chars)
 
 
-def _write_job_status(job_id, success, aborted=False):
-	"""Persist terminal status so it survives browser and process lifetimes."""
-	status_path = job_status_path(job_id)
-	status_path.parent.mkdir(parents=True, exist_ok=True)
-	status_payload = {"done": True, "success": success, "finished_at": time.time()}
-	if aborted:
-		status_payload["error"] = "Pipeline run aborted by user."
-	elif not success:
-		status_payload["error"] = _extract_error_summary(job_log_path(job_id))
-	status_path.write_text(json.dumps(status_payload))
+def _write_job_status(job_id, success, aborted=False, interrupted=False):
+	_pipeline_manager._write_status(job_id, success, aborted=aborted, interrupted=interrupted)
 
 
 def _reset_run_markers(job_id):
-	"""Clear status and retention markers before admitting a rerun."""
-	results_dir = job_results_dir(job_id)
-	results_dir.mkdir(parents=True, exist_ok=True)
-	job_status_path(job_id).unlink(missing_ok=True)
-	job_first_viewed_path(job_id).unlink(missing_ok=True)
-	job_run_started_path(job_id).unlink(missing_ok=True)
+	_job_store.reset_run_markers(job_id)
 
 
 def _start_pipeline(job_id):
-	"""Spawn the Snakemake subprocess for job_id and register it as holding a
-	slot. Caller must hold _pipeline_lock."""
-	log_path = job_log_path(job_id)
-	log_path.parent.mkdir(parents=True, exist_ok=True)
-	results_dir = job_results_dir(job_id)
-	results_dir.mkdir(parents=True, exist_ok=True)
-	# Queued jobs do not receive a start time until they acquire a slot.
-	job_run_started_path(job_id).write_text(str(time.time()))
-	with log_path.open("w") as pipeline_log_file:
-		pipeline_process = subprocess.Popen(
-			[
-				"snakemake",
-				"--cores",
-				str(PIPELINE_CORES),
-				"--use-conda",
-				"--rerun-incomplete",
-				# Jobs write to separate result trees. Snakemake's shared lock
-				# directory is unsafe because one concurrent run can remove it
-				# while another is still completing.
-				"--nolock",
-				"--config",
-				f"job_id={job_id}",
-				f"results_dir={results_dir.relative_to(PROJECT_ROOT)}",
-				f"samples_manifest={job_samples_csv(job_id).relative_to(PROJECT_ROOT)}",
-			],
-			cwd=PROJECT_ROOT,
-			stdout=pipeline_log_file,
-			stderr=subprocess.STDOUT,
-			# A process group lets /abort stop Snakemake and all rule children.
-			start_new_session=True,
-		)
-	_pipeline_processes[job_id] = pipeline_process
-	threading.Thread(target=_watch_pipeline, args=(job_id, pipeline_process), daemon=True).start()
+	_pipeline_manager.cores = PIPELINE_CORES
+	_pipeline_manager.start(job_id)
 
 
 def _drain_pipeline_queue():
-	"""Promote queued jobs into free slots. Caller must hold _pipeline_lock."""
-	while _pipeline_queue and len(_pipeline_processes) < MAX_CONCURRENT_PIPELINES:
-		job_id = _pipeline_queue.popleft()
-		try:
-			_start_pipeline(job_id)
-		except Exception as exception:
-			# Record startup failures so one invalid job cannot wedge the queue.
-			_write_job_status(job_id, False)
-			print(f"[pipeline] failed to start queued job {job_id}: {exception}")
+	_pipeline_manager.drain()
+
+
+def _claim_raw_for_job(job_id):
+	_pipeline_manager.claim_raw(job_id)
+
+
+def _return_raw_to_the_clock(job_id):
+	_pipeline_manager.return_raw(job_id)
 
 
 def _watch_pipeline(job_id, pipeline_process):
-	returncode = pipeline_process.wait()
-	with _pipeline_lock:
-		aborted = job_id in _pipeline_aborted_jobs
-		_pipeline_aborted_jobs.discard(job_id)
-		_write_job_status(job_id, returncode == 0, aborted=aborted)
-		if _pipeline_processes.get(job_id) is pipeline_process:
-			_pipeline_processes.pop(job_id, None)
-		# This run's slot is now free -- hand it to whoever is waiting.
-		_drain_pipeline_queue()
-	# Token persists across reruns for the same job; destroyed when results
-	# are auto-deleted by the retention sweep, not immediately after each run.
-	if returncode == 0 and not aborted:
-		# Best effort: a failed upload must not affect the job's recorded
-		# status, and must not hold up draining the pipeline queue above.
-		try:
-			s3_storage.upload_job_results(job_id, job_results_dir(job_id))
-		except Exception as exception:
-			print(f"[s3] failed to upload results for job {job_id}: {exception}")
-		# The reads have now been processed, and the Snakemake cleanup rule has
-		# deleted the local raw FASTQ. Purge the S3 backup too so raw data is
-		# gone as soon as it is processed, matching the promise shown in the UI.
-		try:
-			s3_storage.delete_raw(job_id)
-		except Exception as exception:
-			print(f"[s3] failed to delete raw uploads for job {job_id}: {exception}")
+	_pipeline_manager.watch(job_id, pipeline_process)
 
 
 def _read_job_status(job_id):
-	try:
-		return json.loads(job_status_path(job_id).read_text())
-	except (OSError, ValueError):
-		return None
+	return _job_store.read_status(job_id)
 
 
 def _mark_first_viewed(job_id):
-	"""Start the download retention window on the first terminal-status view."""
-	viewed_marker_path = job_first_viewed_path(job_id)
-	if not viewed_marker_path.exists():
-		viewed_marker_path.parent.mkdir(parents=True, exist_ok=True)
-		viewed_marker_path.touch()
+	_job_store.mark_first_viewed(job_id)
 
 
 def _job_snapshot(job_id):
@@ -332,19 +294,17 @@ def _job_snapshot(job_id):
 	results_by_isolate = {}
 	if results_dir.is_dir():
 		for result_entry in sorted(results_dir.iterdir()):
-			if not result_entry.is_dir():
+			# "logs" is the pipeline's own log directory, not an isolate.
+			if not result_entry.is_dir() or result_entry.name == "logs":
 				continue
 			results_by_isolate[result_entry.name] = {
 				"has_report": (result_entry / "summary" / "report.html").is_file(),
-				"has_mobile_elements": (
-					result_entry / "06_mobile_elements" / "me_summary.csv"
-				).is_file(),
 			}
 	if not results_by_isolate:
 		# Local results are gone (retention sweep, or a fresh instance after
 		# replacement) -- fall back to what was durably uploaded to S3.
 		for isolate_id in s3_storage.list_isolates(job_id):
-			results_by_isolate[isolate_id] = {"has_report": True, "has_mobile_elements": True}
+			results_by_isolate[isolate_id] = {"has_report": True}
 
 	started_at = None
 	try:
@@ -367,21 +327,31 @@ def _job_snapshot(job_id):
 			"started_at": None,
 		}
 	elif pipeline_process is not None and pipeline_process.poll() is None:
-		run_status = {"done": False, "success": None, "queued": False, "started_at": started_at}
+		run_status = {
+			"done": False,
+			"success": None,
+			"queued": False,
+			"started_at": started_at,
+			"finished_at": None,
+		}
 	else:
 		persisted_status = _read_job_status(job_id)
 		if persisted_status is not None:
+			# started_at and finished_at together are what let the page report how
+			# long the run actually took, rather than only that it ended.
 			run_status = {
 				"done": True,
 				"success": persisted_status.get("success"),
 				"error": persisted_status.get("error"),
 				"started_at": started_at,
+				"finished_at": persisted_status.get("finished_at"),
 			}
 			_mark_first_viewed(job_id)
 
 	return {
 		"job_id": job_id,
 		"samples": samples,
+		"uploads": _read_uploads(job_id),
 		"results": [
 			{"isolate_id": isolate_id, **isolate_result_info}
 			for isolate_id, isolate_result_info in results_by_isolate.items()
@@ -392,7 +362,6 @@ def _job_snapshot(job_id):
 	}
 
 
-# ---------------------------------------------------------------------------
 # One-time migration: fold in any pre-job-ID data (a global config/samples.csv
 # + flat data/raw_fastq/ + flat results/<isolate>/) into a freshly generated
 # job ID, so upgrading this app doesn't strand already-imported samples.
@@ -442,7 +411,6 @@ def _migrate_legacy_samples():
 _migrate_legacy_samples()
 
 
-# ---------------------------------------------------------------------------
 # Data retention: raw FASTQ is deleted by a dedicated Snakemake rule as soon as
 # a sample no longer needs it (see workflow/rules/cleanup.smk). A finished
 # job's results are deleted when *either*:
@@ -453,109 +421,81 @@ _migrate_legacy_samples()
 _VIEW_TTL_SECONDS = 3 * 60 * 60  # 3 hours after first view
 _MAX_TTL_SECONDS = 7 * 24 * 60 * 60  # 7 days from completion
 _RETENTION_SWEEP_INTERVAL = 15 * 60
+_retention_service = RetentionService(
+	_pipeline_manager,
+	s3_storage,
+	lambda job_id: BVBRCClient(job_id=job_id),
+	lambda: PROJECT_ROOT,
+	lambda: DATA_ROOT,
+	lambda: RESULTS_ROOT,
+)
+_retention_service.view_ttl_seconds = _VIEW_TTL_SECONDS
+_retention_service.max_ttl_seconds = _MAX_TTL_SECONDS
+_retention_service.sweep_interval = _RETENTION_SWEEP_INTERVAL
+
+
+def _job_is_live(job_id):
+	return job_id in _pipeline_manager.processes or job_id in _pipeline_manager.queue
+
+
+def _claim_for_expiry(job_id):
+	return _retention_service._claim_finished(job_id)
+
+
+def _claim_for_expiry_of_unrun_job(job_id):
+	return _retention_service._claim_unrun(job_id)
+
+
+def _finish_expiry(job_id):
+	_retention_service._finish(job_id)
 
 
 def _expire_job_results(job_id, job_results_directory, current_time):
-	"""Delete one job's results if its retention window has closed."""
-	if job_pinned_path(job_id).is_file():
-		return  # e.g. a hand-built demo job -- never auto-deleted
-	status_path = job_status_path(job_id)
-	if not status_path.is_file():
-		return  # Run still in progress
-	run_finished_time = status_path.stat().st_mtime
-	# Delete if 7 days have passed since the run finished (safety net), or if 3
-	# hours have passed since the user first viewed it (active download window).
-	viewed_marker_path = job_first_viewed_path(job_id)
-	expired_unviewed = current_time - run_finished_time >= _MAX_TTL_SECONDS
-	expired_after_view = (
-		viewed_marker_path.is_file()
-		and current_time - viewed_marker_path.stat().st_mtime >= _VIEW_TTL_SECONDS
-	)
-	if expired_unviewed or expired_after_view:
-		BVBRCClient(job_id=job_id).destroy_token()
-		shutil.rmtree(job_results_directory, ignore_errors=True)
-		# A successful run's raw is already gone (deleted at processing time), but
-		# a failed run keeps its raw for re-runs; clear both the local copy and
-		# the S3 backup now that the whole job is being expired.
-		shutil.rmtree(job_data_dir(job_id), ignore_errors=True)
-		try:
-			s3_storage.delete_raw(job_id)
-		except Exception as exception:
-			print(f"[s3] failed to delete raw uploads for job {job_id}: {exception}")
+	_retention_service._expire_results(job_id, job_results_directory, current_time)
 
 
 def _sweep_expired_results():
-	current_time = time.time()
-	if not RESULTS_ROOT.is_dir():
-		return
-	for job_results_directory in RESULTS_ROOT.iterdir():
-		if not job_results_directory.is_dir():
-			continue
-		job_id = job_results_directory.name
-		# Anything not named like a job ID was not created by this app -- a
-		# manual `snakemake --config results_dir=...` run, say. It owns no token
-		# and no retention markers, so there is nothing here to expire.
-		if not is_valid_job_id(job_id):
-			continue
-		# One unreadable job must not abort the pass: every job after it in the
-		# listing would then go unpruned, and the next sweep would fail at the
-		# same place, so results and tokens would accumulate forever.
-		try:
-			_expire_job_results(job_id, job_results_directory, current_time)
-		except Exception as exception:
-			print(f"[retention] could not expire {job_id}: {exception}")
-	# Abandoned uploads may never acquire a result status. Their bearer token
-	# must still expire locally instead of remaining on disk forever.
-	jobs_config_root = PROJECT_ROOT / "config" / "jobs"
-	if jobs_config_root.is_dir():
-		for job_config_directory in jobs_config_root.iterdir():
-			token_path = job_config_directory / ".bvbrc_token"
-			if (
-				token_path.is_file()
-				and current_time - token_path.stat().st_mtime >= _MAX_TTL_SECONDS
-			):
-				token_path.unlink(missing_ok=True)
-	# Likewise for the raw FASTQ of a job that was uploaded but never run: it has
-	# no result status, so _expire_job_results never touches it. Purge the local
-	# copy and its S3 backup once it has sat idle past the max TTL, skipping any
-	# job with a run in progress or queued.
-	if DATA_ROOT.is_dir():
-		with _pipeline_lock:
-			active_or_queued = set(_pipeline_processes) | set(_pipeline_queue)
-		for job_data_directory in DATA_ROOT.iterdir():
-			if not job_data_directory.is_dir():
-				continue
-			job_id = job_data_directory.name
-			if not is_valid_job_id(job_id) or job_id in active_or_queued:
-				continue
-			if job_status_path(job_id).is_file():
-				continue  # has a result status -- handled by _expire_job_results
-			if current_time - job_data_directory.stat().st_mtime < _MAX_TTL_SECONDS:
-				continue
-			shutil.rmtree(job_data_directory, ignore_errors=True)
-			try:
-				s3_storage.delete_raw(job_id)
-			except Exception as exception:
-				print(f"[s3] failed to delete raw uploads for job {job_id}: {exception}")
+	_retention_service.sweep()
 
 
 def _retention_loop():
-	while True:
-		time.sleep(_RETENTION_SWEEP_INTERVAL)
-		try:
-			_sweep_expired_results()
-		except Exception as exception:
-			# Keep sweeping on the next tick, but say so: a silent failure here
-			# means results and BV-BRC tokens quietly stop being deleted.
-			print(f"[retention] sweep failed: {exception}")
+	_retention_service._loop()
 
 
-threading.Thread(target=_retention_loop, daemon=True).start()
+def _reconcile_interrupted_runs():
+	_pipeline_manager.reconcile(RESULTS_ROOT)
+
+
+def run_startup_recovery():
+	"""Entry point for the two ways this app is served: gunicorn's post_worker_init
+	hook in production (see gunicorn.conf.py) and the __main__ block locally.
+
+	Deliberately NOT called at import. Importing this module must stay free of side
+	effects on the real job tree -- tests import frontend before repointing
+	PROJECT_ROOT at a temp directory (tests/_isolation.py), so reconciling at import
+	time would scan the developer's actual results/ and mark whatever run they had
+	in progress as failed."""
+	try:
+		_reconcile_interrupted_runs()
+		_retention_service.start()
+	except Exception as exception:
+		# Never let recovery keep the app from booting: a frontend that will not
+		# start is strictly worse than one whose job states are stale.
+		print(f"[pipeline] startup reconciliation failed: {exception}")
 
 
 @app.route("/")
 def analysis():
 	return render_template("index.html")
+
+
+@app.route("/job/new", methods=["POST"])
+@limiter.limit("20/minute")
+def create_job():
+	"""Reserve one empty job before concurrent browser uploads begin."""
+	job_id = generate_job_id()
+	_write_samples(job_samples_csv(job_id), [])
+	return jsonify({"job_id": job_id}), 201
 
 
 @app.route("/settings", methods=["GET", "POST"])
@@ -566,27 +506,35 @@ def settings():
 	_job_or_400(job_id)
 	if not job_samples_csv(job_id).is_file():
 		abort(404)
-	settings_saved = False
-	login_error = None
 	if request.method == "POST":
 		api_registry.save_job_overrides(job_id, request.form)
-		settings_saved = True
 		username = request.form.get("username", "").strip()
 		password = request.form.get("password", "")
-		if username or password:
-			if (
-				not username
-				or not password
-				or not BVBRCClient(job_id=job_id).login(username, password)
-			):
-				login_error = "BV-BRC authentication failed."
+		login_failed = bool(username or password) and (
+			not username or not password or not BVBRCClient(job_id=job_id).login(username, password)
+		)
+		# Post/Redirect/Get. Without it the browser is left sitting on the result of
+		# a POST to a bare /settings: a URL with no job in it, so every link on the
+		# page has nothing to go back to, and a reload re-submits the form (and the
+		# password) rather than re-rendering. Redirecting to /settings?job_id=... ends
+		# every save on a plain GET URL that carries the job and can be reloaded.
+		return redirect(
+			url_for(
+				"settings",
+				job_id=job_id,
+				saved=1,
+				login_error=1 if login_failed else None,
+			)
+		)
 	return render_template(
 		"settings.html",
 		job_id=job_id,
 		endpoints=list(api_registry.load_endpoints(job_id=job_id).values()),
 		defaults=api_registry.DEFAULT_ENDPOINTS,
-		settings_saved=settings_saved,
-		login_error=login_error,
+		settings_saved=request.args.get("saved") == "1",
+		login_error=(
+			"BV-BRC authentication failed." if request.args.get("login_error") == "1" else None
+		),
 	)
 
 
@@ -631,11 +579,139 @@ def api_health():
 		_job_or_400(job_id)
 		if not job_samples_csv(job_id).is_file():
 			abort(404)
-	return jsonify({"services": api_registry.check_all(job_id=job_id)})
+	with _pipeline_lock:
+		running_count = sum(
+			1
+			for pipeline_process in _pipeline_processes.values()
+			if pipeline_process.poll() is None
+		)
+		queued_count = len(_pipeline_queue)
+	return jsonify(
+		{
+			"services": api_registry.check_all(job_id=job_id),
+			# How deploy/refresh-databases.sh knows when it is safe to restart.
+			# Counts only, never job IDs: this route is deliberately exempt from
+			# auth (see the before_request hook) and a job ID is a credential.
+			"pipelines": {
+				"draining": _is_draining(),
+				"running": running_count,
+				"queued": queued_count,
+			},
+		}
+	)
+
+
+def _save_upload(job_id, upload_file, destination_path):
+	return _import_service.save_upload(job_id, upload_file, destination_path)
+
+
+def _release_local_raw(job_id, *paths):
+	_import_service.release_local_raw(job_id, *paths)
+
+
+def _discard_raw_upload(job_id, *paths):
+	_import_service.discard_raw_upload(job_id, *paths)
+
+
+def _backup_raw_files_to_s3(job_id, raw_paths):
+	return _import_service.backup_raw_files(job_id, raw_paths)
+
+
+def _raw_paths_for_isolates(job_id, isolate_ids):
+	return _import_service.raw_paths_for_isolates(job_id, isolate_ids, job_samples_csv(job_id))
+
+
+def _job_is_busy(job_id):
+	return _pipeline_manager.is_busy(job_id)
+
+
+def _resolve_upload_job(requested_job_id):
+	"""The job an upload lands in: the one the caller named, or a brand new one.
+
+	Naming a job is how a batch gets filled by more than one upload, and by more
+	than one method -- a folder import, then a cloud pull, then a stray pair, all
+	into the same job ID. Returns (job_id, error_response); exactly one is None.
+	"""
+	requested_job_id = (requested_job_id or "").strip().upper()
+	if not requested_job_id:
+		return generate_job_id(), None
+	if not is_valid_job_id(requested_job_id):
+		return None, (jsonify({"error": "Malformed job ID."}), 400)
+	if not job_samples_csv(requested_job_id).is_file():
+		return None, (jsonify({"error": "Unknown job ID."}), 404)
+	if _job_is_busy(requested_job_id):
+		# The pipeline reads the manifest and the raw FASTQ it points at. Adding
+		# samples mid-run would either be silently ignored or read half-written.
+		return None, (
+			jsonify(
+				{
+					"error": "This job's pipeline is running. Wait for it to finish "
+					"before adding more samples."
+				}
+			),
+			409,
+		)
+	return requested_job_id, None
+
+
+def _authenticate_job(job_id, username, password):
+	"""Log this job in to BV-BRC when credentials came with the request. Returns
+	an error message, or None when there is nothing to do or it worked."""
+	if not username or not password:
+		return None
+	if not BVBRCClient(job_id=job_id).login(username, password):
+		return "BV-BRC authentication failed"
+	return None
+
+
+def _admit_pipeline_run(job_id):
+	"""Start or queue a run. Shared by /run and by the auto-run option on every
+	upload path.
+
+	Returns (payload, http_status)."""
+	authentication_error = _authenticate_job(
+		job_id,
+		request.form.get("username", "").strip(),
+		request.form.get("password", "").strip(),
+	)
+
+	if authentication_error:
+		return jsonify({"error": authentication_error}), 401
+
+	_pipeline_manager.max_concurrent = MAX_CONCURRENT_PIPELINES
+	return _pipeline_manager.admit(job_id, lambda: BVBRCClient(job_id=job_id).is_authenticated())
+
+
+def _auto_run_if_requested(job_id, form):
+	"""Start the pipeline as soon as an upload finishes, when the user asked for it.
+
+	Returns what happened, or None when auto-run was not requested. It never
+	raises and never fails the upload: the samples are registered either way, so a
+	run that cannot start (no BV-BRC login, say) is reported alongside a
+	successful upload rather than turning it into an error the user reads as
+	"my files were lost"."""
+	if (form.get("auto_run") or "").strip().lower() not in ("1", "true", "on", "yes"):
+		return None
+
+	authentication_error = _authenticate_job(
+		job_id, (form.get("username") or "").strip(), (form.get("password") or "").strip()
+	)
+	if authentication_error:
+		return {"started": False, "error": authentication_error}
+
+	run_payload, run_status_code = _admit_pipeline_run(job_id)
+	if run_status_code >= 400:
+		return {"started": False, "error": run_payload["error"]}
+	return {
+		"started": True,
+		"queued": run_payload.get("queued", False),
+		"queue_position": run_payload.get("queue_position"),
+	}
 
 
 @app.route("/submit", methods=["POST"])
 def submit():
+	upload_started_at = time.time()
 	first_fastq_upload = request.files.get("fastq_file_1")
 	second_fastq_upload = request.files.get("fastq_file_2")
 	if not first_fastq_upload or not second_fastq_upload:
@@ -644,53 +720,69 @@ def submit():
 	first_read_checksum = request.form.get("fastq_file_1_checksum", "").strip()
 	second_read_checksum = request.form.get("fastq_file_2_checksum", "").strip()
 
-	job_id = generate_job_id()
+	# Blank job_id starts a new batch; naming one adds this pair to it.
+	job_id, job_error = _resolve_upload_job(request.form.get("job_id"))
+	if job_error:
+		return job_error
 
 	data_dir = job_data_dir(job_id)
 	data_dir.mkdir(parents=True, exist_ok=True)
 
-	# Save files to this batch's raw_fastq directory
+	# Write each pair to this batch's raw_fastq directory, streaming it to S3 as it
+	# arrives rather than reading the finished file back off disk to upload it.
 	r1_path = data_dir / secure_filename(first_fastq_upload.filename)
 	r2_path = data_dir / secure_filename(second_fastq_upload.filename)
-	first_fastq_upload.save(r1_path)
-	second_fastq_upload.save(r2_path)
+	r1_in_s3 = _save_upload(job_id, first_fastq_upload, r1_path)
+	r2_in_s3 = _save_upload(job_id, second_fastq_upload, r2_path)
 
-	# Verify MD5 checksums if provided
+	# Verify MD5 checksums if provided. Deliberately re-reads the files from disk
+	# rather than digesting the bytes in flight: what has to be correct is what the
+	# pipeline will actually read, so this checks the artifact, not our copy of it.
 	if first_read_checksum:
 		checksum_valid, checksum_message = verify_file_md5(r1_path, first_read_checksum)
 		if not checksum_valid:
-			r1_path.unlink()
-			r2_path.unlink()
+			_discard_raw_upload(job_id, r1_path, r2_path)
 			return jsonify({"error": f"R1 checksum mismatch: {checksum_message}"}), 400
 
 	if second_read_checksum:
 		checksum_valid, checksum_message = verify_file_md5(r2_path, second_read_checksum)
 		if not checksum_valid:
-			r1_path.unlink()
-			r2_path.unlink()
+			_discard_raw_upload(job_id, r1_path, r2_path)
 			return jsonify({"error": f"R2 checksum mismatch: {checksum_message}"}), 400
 
-	# Derive isolate_id from R1 filename (strips _R1 and everything after)
 	isolate_id = re.sub(r"_R[12].*", "", Path(first_fastq_upload.filename).name)
 	if not is_valid_isolate_id(isolate_id):
-		r1_path.unlink()
-		r2_path.unlink()
+		_discard_raw_upload(job_id, r1_path, r2_path)
 		return jsonify({"error": "Could not derive a valid isolate ID from the filename"}), 400
 
-	_upsert_sample(
-		job_samples_csv(job_id),
-		isolate_id,
-		str(r1_path.relative_to(PROJECT_ROOT)),
-		str(r2_path.relative_to(PROJECT_ROOT)),
-	)
+	with _job_lock(job_id):
+		existing_isolates = {
+			sample_row.get("isolate_id") for sample_row in _read_samples(job_samples_csv(job_id))[0]
+		}
+		_upsert_sample(
+			job_samples_csv(job_id),
+			isolate_id,
+			str(r1_path.relative_to(PROJECT_ROOT)),
+			str(r2_path.relative_to(PROJECT_ROOT)),
+		)
+		was_update = isolate_id in existing_isolates
+		upload_entry = _record_upload(
+			job_id,
+			"pair",
+			upload_started_at,
+			added=[] if was_update else [isolate_id],
+			updated=[isolate_id] if was_update else [],
+		)
 
-	# Back the verified raw reads up to S3. Best effort: the local copy is what
-	# the pipeline reads, so a failed upload must not fail the request.
-	for raw_path in (r1_path, r2_path):
-		try:
-			s3_storage.upload_raw_file(job_id, raw_path)
-		except Exception as exception:
-			print(f"[s3] failed to upload raw {raw_path.name} for job {job_id}: {exception}")
+	# No backup pass here: both FASTQs went to S3 while they were being received. Now
+	# that they are verified and in the manifest, the local copies can go -- the run
+	# fetches them back from S3 when it actually needs them. Released per file, and
+	# only for files S3 confirmed: a read that failed to upload simply stays on disk,
+	# so it is never missing from both places at once.
+	_release_local_raw(
+		job_id,
+		*[path for path, in_s3 in ((r1_path, r1_in_s3), (r2_path, r2_in_s3)) if in_s3],
+	)
 
 	return jsonify(
 		{
@@ -698,6 +790,10 @@ def submit():
 			"f1": first_fastq_upload.filename,
 			"f2": second_fastq_upload.filename,
 			"isolate_id": isolate_id,
+			"added": upload_entry["added"],
+			"updated": upload_entry["updated"],
+			"upload": upload_entry,
+			"auto_run": _auto_run_if_requested(job_id, request.form),
 		}
 	), 200
 
@@ -740,11 +836,15 @@ def _flatten_single_root(resolved_path):
 
 @app.route("/import", methods=["POST"])
 def import_folder():
+	upload_started_at = time.time()
 	uploaded_file_names = request.files.getlist("files")
 	if not uploaded_file_names:
 		return jsonify({"error": "No files uploaded"}), 400
 
-	job_id = generate_job_id()
+	# Blank job_id starts a new batch; naming one merges this folder into it.
+	job_id, job_error = _resolve_upload_job(request.form.get("job_id"))
+	if job_error:
+		return job_error
 
 	temporary_import_dir = Path(tempfile.mkdtemp(prefix="import_"))
 	try:
@@ -767,38 +867,131 @@ def import_folder():
 
 		import_root = _flatten_single_root(temporary_import_dir)
 		try:
-			# move=True: root is our own throwaway staging dir, so hand the
-			# files off to this job's data dir instead of copying — for large
-			# FASTQ dumps a copy needlessly doubles disk usage on top of what
-			# Werkzeug already spooled while parsing the upload.
-			import_result = import_samples.import_directory(
+			import_result = _import_service.import_directory(
+				job_id,
 				import_root,
-				samples_csv=job_samples_csv(job_id),
-				recursive=True,
-				dest_dir=job_data_dir(job_id),
+				job_samples_csv(job_id),
+				job_data_dir(job_id),
+				"folder",
+				upload_started_at,
 			)
 		except NotADirectoryError:
 			return jsonify({"error": "No valid files found in upload"}), 400
 		except Exception as exception:
 			return jsonify({"error": str(exception)}), 500
 		import_result["job_id"] = job_id
-
-		# Back the imported raw reads up to S3. import_directory has already
-		# discarded any checksum-failed pairs, so the job's data dir now holds
-		# exactly the FASTQs that entered the manifest. Best effort: the local
-		# copy is what the pipeline reads, so a failed upload must not fail the
-		# request.
-		for raw_path in sorted(job_data_dir(job_id).glob("*")):
-			if not raw_path.is_file():
-				continue
-			try:
-				s3_storage.upload_raw_file(job_id, raw_path)
-			except Exception as exception:
-				print(f"[s3] failed to upload raw {raw_path.name} for job {job_id}: {exception}")
-
+		_release_local_raw(
+			job_id,
+			*_backup_raw_files_to_s3(
+				job_id,
+				_raw_paths_for_isolates(job_id, import_result["added"] + import_result["updated"]),
+			),
+		)
+		import_result["auto_run"] = _auto_run_if_requested(job_id, request.form)
 		return jsonify(import_result), 200
 	finally:
 		shutil.rmtree(temporary_import_dir, ignore_errors=True)
+
+
+# Cloud import: pull a batch's FASTQ files from a OneDrive/Google Drive share
+# link instead of having the browser push them. The sequencing company usually
+# mails a link to the run folder, and re-uploading tens of GB through a laptop
+# only to send it back out again is the slowest way to move it.
+#
+# The download happens on the server and, for a real run folder, takes far longer
+# than an HTTP request can be held open, so it runs on a background thread while
+# the browser polls /cloud-import/status -- the same shape /run and /status use.
+# Once the files land, they go through import_samples.import_directory() exactly
+# like a browser folder upload: same R1/R2 pairing, same MD5 verification against
+# the stats workbook, same manifest, same job ID. From /run's point of view a
+# cloud-imported job is indistinguishable from an uploaded one.
+#
+# The feature is disabled: the two routes below, the manager that backs them, the
+# fieldset in templates/index.html, and the handlers in static/app.js are all
+# commented out. workflow/lib/cloud_import.py and its unit tests are untouched, so
+# re-enabling means uncommenting these four call sites -- nothing needs rewriting.
+
+# MAX_CONCURRENT_CLOUD_IMPORTS = max(1, int(os.environ.get("MAX_CONCURRENT_CLOUD_IMPORTS", "2")))
+#
+#
+# def _complete_cloud_import(job_id, import_result, upload_form):
+# 	"""Finalize a completed cloud transfer through the same S3/run path as uploads."""
+# 	_release_local_raw(
+# 		job_id,
+# 		*_backup_raw_files_to_s3(
+# 			job_id,
+# 			_raw_paths_for_isolates(job_id, import_result["added"] + import_result["updated"]),
+# 		),
+# 	)
+# 	import_result["auto_run"] = _auto_run_if_requested(job_id, upload_form)
+#
+#
+# _cloud_import_manager = CloudImportManager(
+# 	_import_service, MAX_CONCURRENT_CLOUD_IMPORTS, _complete_cloud_import
+# )
+# _CLOUD_IMPORT_RECORD_TTL = _cloud_import_manager.record_ttl
+# _cloud_import_lock = _cloud_import_manager.lock
+# _cloud_imports = _cloud_import_manager.records
+#
+#
+# def _set_cloud_import(job_id, **fields):
+# 	_cloud_import_manager.set(job_id, **fields)
+#
+#
+# def _prune_cloud_imports():
+# 	_cloud_import_manager.prune()
+#
+#
+# def _run_cloud_import(job_id, share_url, upload_form):
+# 	_cloud_import_manager._run(
+# 		job_id, share_url, upload_form, job_samples_csv(job_id), job_data_dir(job_id)
+# 	)
+#
+#
+# @app.route("/cloud-import", methods=["POST"])
+# @limiter.limit("5/minute")
+# def cloud_import_start():
+# 	share_url = (request.form.get("share_url") or "").strip()
+# 	if not share_url:
+# 		return jsonify({"error": "Paste a OneDrive or Google Drive share link first."}), 400
+# 	# Refuse the link before a job ID exists: one we are never going to fetch
+# 	# should not leave an empty job behind for the retention sweep to clean up.
+# 	if not cloud_import.is_allowed_url(share_url) or cloud_import.provider_for(share_url) is None:
+# 		return jsonify(
+# 			{
+# 				"error": "Only Google Drive and OneDrive/SharePoint https:// share links can be imported."
+# 			}
+# 		), 400
+#
+# 	# Blank job_id starts a new batch; naming one pulls this link into it.
+# 	requested_job_id, job_error = _resolve_upload_job(request.form.get("job_id"))
+# 	if job_error:
+# 		return job_error
+#
+# 	# The thread outlives this request, so take a copy of what it needs now.
+# 	upload_form = {
+# 		field: request.form.get(field, "") for field in ("auto_run", "username", "password")
+# 	}
+#
+# 	job_id = requested_job_id
+# 	_cloud_import_manager.max_concurrent = MAX_CONCURRENT_CLOUD_IMPORTS
+# 	started, error_message = _cloud_import_manager.start(
+# 		job_id, share_url, upload_form, job_samples_csv(job_id), job_data_dir(job_id)
+# 	)
+# 	if not started:
+# 		status_code = 409 if "already has" in error_message else 429
+# 		return jsonify({"error": error_message}), status_code
+# 	return jsonify({"job_id": job_id, "state": "running"}), 202
+#
+#
+# @app.route("/cloud-import/status")
+# def cloud_import_status():
+# 	job_id = request.args.get("job_id")
+# 	_job_or_400(job_id)
+# 	import_record = _cloud_import_manager.get(job_id)
+# 	if import_record is None:
+# 		return jsonify({"error": "No cloud import found for this job ID"}), 404
+# 	return jsonify(import_record)
 
 
 @app.route("/run", methods=["POST"])
@@ -806,52 +999,16 @@ def run_pipeline():
 	job_id = request.form.get("job_id")
 	_job_or_400(job_id)
 
-	username = request.form.get("username", "").strip()
-	password = request.form.get("password", "").strip()
+	authentication_error = _authenticate_job(
+		job_id,
+		request.form.get("username", "").strip(),
+		request.form.get("password", "").strip(),
+	)
+	if authentication_error:
+		return jsonify({"error": authentication_error}), 401
 
-	if username and password:
-		client = BVBRCClient(job_id=job_id)
-		if not client.login(username, password):
-			return jsonify({"error": "BV-BRC authentication failed"}), 401
-
-	if not job_samples_csv(job_id).exists():
-		return jsonify({"error": "Unknown job ID"}), 404
-
-	samples, sample_fieldnames = _read_samples(job_samples_csv(job_id))
-	if not samples:
-		return jsonify({"error": "No FASTQ data has been uploaded for this job yet"}), 400
-
-	# Background BV-BRC upload cannot answer an interactive login prompt.
-	if not BVBRCClient(job_id=job_id).is_authenticated():
-		return jsonify(
-			{
-				"error": "BV-BRC login required: submit your BV-BRC username and password before running"
-			}
-		), 401
-
-	with _pipeline_lock:
-		existing_process = _pipeline_processes.get(job_id)
-		if (
-			existing_process is not None and existing_process.poll() is None
-		) or job_id in _pipeline_queue:
-			return jsonify({"error": "This pipeline job is already in progress"}), 409
-
-		_reset_run_markers(job_id)
-
-		# Queue the job when all configured pipeline slots are occupied.
-		if len(_pipeline_processes) >= MAX_CONCURRENT_PIPELINES:
-			_pipeline_queue.append(job_id)
-			return jsonify(
-				{
-					"message": "Pipeline queued",
-					"job_id": job_id,
-					"queued": True,
-					"queue_position": len(_pipeline_queue),
-				}
-			), 202
-
-		_start_pipeline(job_id)
-	return jsonify({"message": "Pipeline started", "job_id": job_id, "queued": False}), 200
+	run_payload, run_status_code = _admit_pipeline_run(job_id)
+	return jsonify(run_payload), run_status_code
 
 
 @app.route("/abort", methods=["POST"])
@@ -864,10 +1021,22 @@ def abort_pipeline():
 		# the queue and record the outcome here -- no watcher will ever run for it.
 		if job_id in _pipeline_queue:
 			_pipeline_queue.remove(job_id)
+			_persist_pipeline_queue()
 			_pipeline_aborted_jobs.discard(job_id)
 			_write_job_status(job_id, False, aborted=True)
-			return jsonify({"message": "Queued run cancelled", "job_id": job_id}), 200
+			cancelled_before_starting = True
+		else:
+			cancelled_before_starting = False
 
+	if cancelled_before_starting:
+		# Nothing needs these reads any more, so put them back on the expiry clock.
+		# Outside the lock: this talks to S3.
+		_return_raw_to_the_clock(job_id)
+		return jsonify({"message": "Queued run cancelled", "job_id": job_id}), 200
+
+	with _pipeline_lock:
+		# Already running: signal it. Its watcher records the abort and returns the
+		# reads to the expiry clock, so there is nothing to do for them here.
 		pipeline_process = _pipeline_processes.get(job_id)
 		if pipeline_process is None or pipeline_process.poll() is not None:
 			return jsonify(
@@ -1012,4 +1181,8 @@ if __name__ == "__main__":
 	debug_enabled = os.environ.get("FLASK_DEBUG") == "1"
 	host_name = os.environ.get("HOST", "127.0.0.1")
 	port_number = int(os.environ.get("PORT", "5001"))
+	# Skip under the reloader's parent process, which exists only to respawn the
+	# child: recovering there would mark the child's own running jobs as failed.
+	if not debug_enabled or os.environ.get("WERKZEUG_RUN_MAIN") == "true":
+		run_startup_recovery()
 	app.run(debug=debug_enabled, host=host_name, port=port_number)

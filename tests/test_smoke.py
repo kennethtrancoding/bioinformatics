@@ -76,7 +76,7 @@ class Base(unittest.TestCase):
         return self.client.post("/submit", data=data, content_type="multipart/form-data")
 
 
-# ---------------------------------------------------------------- pages / static
+# Pages and static assets
 class TestPages(Base):
     def test_index_renders(self):
         r = self.client.get("/")
@@ -91,7 +91,11 @@ class TestPages(Base):
         r = self.client.get("/")
         self.assertEqual(r.headers["X-Content-Type-Options"], "nosniff")
         self.assertEqual(r.headers["X-Frame-Options"], "DENY")
-        self.assertEqual(r.headers["Referrer-Policy"], "no-referrer")
+        # Not "no-referrer": that makes browsers send "Origin: null" on same-origin
+        # form POSTs, which _reject_cross_site_mutations rejects -- it took down the
+        # settings Save/Reset buttons. "same-origin" withholds the Referer (and the
+        # job ID in it) from cross-origin requests just as thoroughly.
+        self.assertEqual(r.headers["Referrer-Policy"], "same-origin")
         self.assertIn("camera=()", r.headers["Permissions-Policy"])
 
     def test_settings_page_without_job(self):
@@ -105,7 +109,7 @@ class TestPages(Base):
         self.assertEqual(self.client.get("/settings?job_id=ABCDEFGHJKMN").status_code, 404)
 
 
-# ---------------------------------------------------------------- upload
+# Upload
 class TestSubmit(Base):
     def test_upload_pair_creates_job_and_manifest(self):
         r = self.upload_pair("SAMPA")
@@ -161,7 +165,7 @@ class TestSubmit(Base):
         self.assertEqual(r.status_code, 400)
 
 
-# ---------------------------------------------------------------- folder import
+# Folder import
 class TestImport(Base):
     def test_import_folder_pairs_samples(self):
         data = {
@@ -197,7 +201,7 @@ class TestImport(Base):
         self.assertEqual(r.status_code, 400)
 
 
-# ---------------------------------------------------------------- run / queue / abort
+# Run, queue, and abort
 class TestPipelineLifecycle(Base):
     def setUp(self):
         super().setUp()
@@ -366,7 +370,7 @@ class TestPipelineLifecycle(Base):
         self.assertEqual(self.client.get("/status?job_id=lower").status_code, 400)
 
 
-# ---------------------------------------------------------------- lookup + results
+# Lookup and results
 class TestResults(Base):
     def setUp(self):
         super().setUp()
@@ -374,8 +378,7 @@ class TestResults(Base):
         self.res = jobs.job_results_dir(self.job_id) / "RESA"
         (self.res / "summary").mkdir(parents=True, exist_ok=True)
         (self.res / "summary" / "report.html").write_text("<h1>report</h1>")
-        (self.res / "06_mobile_elements").mkdir(parents=True, exist_ok=True)
-        (self.res / "06_mobile_elements" / "me_summary.csv").write_text("a,b\n1,2\n")
+        (jobs.job_results_dir(self.job_id) / "logs").mkdir(parents=True, exist_ok=True)
         (jobs.job_results_dir(self.job_id) / "master_report.csv").write_text("isolate\nRESA\n")
 
     def test_job_lookup_snapshot(self):
@@ -386,7 +389,7 @@ class TestResults(Base):
         self.assertTrue(body["has_master_report"])
         entry = next(e for e in body["results"] if e["isolate_id"] == "RESA")
         self.assertTrue(entry["has_report"])
-        self.assertTrue(entry["has_mobile_elements"])
+        self.assertNotIn("logs", [e["isolate_id"] for e in body["results"]])
 
     def test_job_lookup_unknown_and_malformed(self):
         self.assertEqual(self.client.get("/job/ABCDEFGHJKMN").status_code, 404)
@@ -430,7 +433,7 @@ class TestResults(Base):
         )
 
 
-# ---------------------------------------------------------------- security
+# Security
 class TestSecurity(Base):
     def test_isolate_path_traversal_blocked(self):
         job_id = self.upload_pair("TRAV").get_json()["job_id"]
@@ -471,6 +474,35 @@ class TestSecurity(Base):
             headers={"Origin": "http://localhost", "Sec-Fetch-Site": "same-origin"},
         )
         self.assertNotEqual(r.status_code, 403)
+
+    def test_opaque_origin_post_rejected(self):
+        # A sandboxed or no-referrer attacker page can only produce "Origin: null",
+        # which names no host and so must never pass for the true one.
+        job_id = self.upload_pair("NULLORIG").get_json()["job_id"]
+        r = self.client.post("/run", data={"job_id": job_id}, headers={"Origin": "null"})
+        self.assertEqual(r.status_code, 403)
+
+    def test_settings_forms_submit_as_a_browser_sends_them(self):
+        # Both settings buttons are plain <form method=POST> navigations, not fetch()
+        # calls, so they carry the headers a browser attaches to a same-origin form
+        # submit. Sending "Referrer-Policy: no-referrer" turned the Origin on these
+        # into "null" and 403'd both buttons; this drives the real submissions.
+        job_id = self.upload_pair("SETFORM").get_json()["job_id"]
+        form_post = {
+            "Origin": "http://localhost",
+            "Sec-Fetch-Site": "same-origin",
+            "Sec-Fetch-Mode": "navigate",
+        }
+        r = self.client.post(
+            f"/settings?job_id={job_id}",
+            data={"job_id": job_id, "username": "", "password": ""},
+            headers=form_post,
+        )
+        self.assertEqual(r.status_code, 302, "Save settings must not be rejected")
+        self.assertIn(f"job_id={job_id}", r.headers["Location"])
+
+        r = self.client.post("/settings/reset", data={"job_id": job_id}, headers=form_post)
+        self.assertEqual(r.status_code, 302, "Reset to defaults must not be rejected")
 
     def test_basic_auth_gate(self):
         frontend._APP_PASSWORD = "s3cret"
@@ -517,7 +549,9 @@ class TestSecurity(Base):
         r = self.client.post(
             "/settings", data={"job_id": job_id, "auth": "https://evil.example/steal"}
         )
-        self.assertEqual(r.status_code, 200)
+        # Saving redirects (Post/Redirect/Get) back to the job's own settings URL.
+        self.assertEqual(r.status_code, 302)
+        self.assertIn(f"job_id={job_id}", r.headers["Location"])
         saved = json.loads(jobs.job_api_endpoints_path(job_id).read_text())
         self.assertNotIn("auth", saved)
         self.assertEqual(
@@ -529,7 +563,8 @@ class TestSecurity(Base):
         job_id = self.upload_pair("SETJOB2").get_json()["job_id"]
         override = "https://p3.theseed.org/services/Workspace-test"
         r = self.client.post("/settings", data={"job_id": job_id, "workspace": override})
-        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.status_code, 302)
+        self.assertIn(f"job_id={job_id}", r.headers["Location"])
         self.assertEqual(api_registry.get_url("workspace", job_id=job_id), override)
         # the client actually honors the override
         token_for(job_id)
@@ -569,7 +604,7 @@ class TestSecurity(Base):
         self.assertEqual(f.stat().st_mode & 0o077, 0, oct(f.stat().st_mode))
 
 
-# ---------------------------------------------------------------- libraries
+# Libraries
 class TestLibraries(Base):
     def test_fastq_validation(self):
         good = ROOT / "data" / "raw_fastq" / "good.fastq.gz"
