@@ -14,7 +14,7 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 
-# Unambiguous alphabet
+# Exclude characters that are easy to misread.
 _ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 _LENGTH = 12
 
@@ -56,6 +56,13 @@ def job_samples_csv(job_id: str) -> Path:
 	return job_config_dir(job_id) / "samples.csv"
 
 
+def job_uploads_path(job_id: str) -> Path:
+	"""Log of every upload that added samples to this job: how they arrived, when,
+	and how long each took. A job can be filled by several uploads through several
+	different methods, so this is a list, not a single timestamp."""
+	return job_config_dir(job_id) / "uploads.json"
+
+
 def job_log_path(job_id: str) -> Path:
 	return PROJECT_ROOT / "logs" / f"{job_id}.log"
 
@@ -89,3 +96,28 @@ def job_api_endpoints_path(job_id: str) -> Path:
 def job_token_path(job_id: str) -> Path:
 	"""Private BV-BRC bearer token belonging only to this job."""
 	return job_config_dir(job_id) / ".bvbrc_token"
+
+
+# The two paths below are app-wide rather than per-job, but they live under
+# config/jobs/ because that is the directory mounted on a persistent volume (see
+# deploy/bioinformatics.service). The container filesystem is ephemeral, so
+# anything that has to outlive a restart has to sit on a volume -- and outliving a
+# restart is the entire point of both of these.
+
+
+def pipeline_queue_path() -> Path:
+	"""FIFO of jobs admitted but not yet started.
+
+	The queue is held in memory, so a restart used to drop every job waiting in
+	it -- and drop it silently, because admission clears a job's run markers
+	before queueing, leaving nothing on disk to say the run was ever coming.
+	Persisting the queue is what lets a restart resume instead of forget."""
+	return PROJECT_ROOT / "config" / "jobs" / ".pipeline_queue.json"
+
+
+def drain_flag_path() -> Path:
+	"""Set by the host while it prepares to restart the service (see
+	deploy/refresh-databases.sh). While it exists, runs queue instead of starting,
+	so the in-flight set drains to empty and the restart lands on an idle app
+	rather than killing a run mid-assembly. Cleared on boot."""
+	return PROJECT_ROOT / "config" / "jobs" / ".drain"

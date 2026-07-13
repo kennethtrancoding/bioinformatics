@@ -25,7 +25,6 @@ max_wait = snakemake.params.max_wait_time
 
 Path(assembly_fasta).parent.mkdir(parents=True, exist_ok=True)
 
-# Load upload results and genus
 with open(upload_log_file) as file_handle:
 	upload_data = json.load(file_handle)
 
@@ -36,7 +35,6 @@ r1_remote = upload_data["r1_remote"]
 r2_remote = upload_data["r2_remote"]
 workspace = upload_data["workspace"]
 
-# Initialize client
 client = BVBRCClient(
 	token_file=snakemake.config["bvbrc"]["token_file"],
 	job_id=snakemake.config.get("job_id"),
@@ -86,7 +84,6 @@ if not job_id:
 
 logger.info(f"Job ID: {job_id}")
 
-# Poll job until completion
 poll_interval = snakemake.config["bvbrc"]["poll_interval"]
 is_complete, final_status = client.wait_for_job(
  job_id, max_wait_seconds=max_wait, poll_interval=poll_interval
@@ -170,7 +167,6 @@ logger.info(f"Downloading genome report: {report_remote}")
 if not client.download_file(report_remote, genome_report):
 	raise RuntimeError(f"Failed to download genome report from {report_remote}")
 
-# FullGenomeReport.html
 html_remote = _resolve(
  [
   lambda remote_entry: _name(remote_entry) == "fullgenomereport.html",

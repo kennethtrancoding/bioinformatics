@@ -1,25 +1,37 @@
 """
-Remote NCBI BLASTP for resistance-enzyme novelty (Snakemake rule:
-blast_ncbi_novelty).
+BLASTP for resistance-enzyme novelty (Snakemake rule: blast_ncbi_novelty).
 
-Mirrors the tutorial's manual NCBI BLAST: for each antibiotic-inactivation
-enzyme RGI flagged, BLASTP its protein against NCBI's nr and report the closest
-known sequence, its %identity/coverage (is the enzyme globally novel?), and
-whether the top hit sits on a plasmid vs a chromosome.
+For each antibiotic-inactivation enzyme RGI flagged, find the closest known
+sequence and report its %identity/coverage (is the enzyme novel?) and whether the
+top hit sits on a plasmid vs a chromosome.
 
-By default every antibiotic-inactivation enzyme (the tutorial's focus) is
-submitted in a SINGLE remote job (blastp accepts a multi-sequence query, so this
-is one submission to NCBI regardless of count -- no need to cap for politeness).
---max-queries is a safety valve only (0 = no cap).
+TWO-TIER SEARCH: LOCAL AMR CATALOG FIRST, NCBI ONLY AS A FALLBACK
 
-Nothing NCBI returns is thrown away: the complete tabular output for every hit
-of every query is saved to <out_stem>_full.tsv; blast_results.csv is an
+The search runs against a local BLAST database built from NCBI's AMRFinderPlus
+reference protein catalog (~10k curated resistance proteins, ~5 MB -- see
+build_amr_blastdb.py). Enzymes with no match there, and only those, are then sent
+to NCBI's remote nr.
+
+This ordering exists because remote BLAST is queue-bound, not size-bound. On this
+pipeline a remote nr search took 30 minutes to time out and return *nothing*,
+identically whether we submitted 216 proteins or 15 -- capping the query did not
+help, because the wait is NCBI's queue, not the work. The local catalog answers the
+same question in about a minute for the full enzyme set.
+
+It also asks a better question. Against all of nr, every protein hits something, so
+"novel" degrades to "not identical to one of a billion sequences". Against the AMR
+catalog, a miss means "this does not match any KNOWN resistance protein" -- which is
+the finding the pipeline is actually looking for. Those genuine misses are exactly
+the ones worth spending a remote NCBI search on.
+
+Nothing is thrown away: the complete tabular output for every hit of every query
+(local and remote) is saved to <out_stem>_full.tsv; blast_results.csv is an
 additional best-hit-per-enzyme summary (novelty + plasmid/chromosome) for the
-report.
+report, with a `source` column saying which database answered.
 
-If BLAST+ is missing, the network is down, or NCBI rejects
-the job, we still write both files (with a note) and exit 0 -- this step is
-informational, and the report/pipeline shouldn't hang on a flaky service.
+If BLAST+ is missing, the local database has not been built, the network is down, or
+NCBI rejects the job, we still write both files (with a note) and exit 0 -- this step
+is informational, and the report/pipeline shouldn't hang on a flaky service.
 """
 
 import argparse
@@ -187,10 +199,18 @@ FIELDS = [
 	"ncbi_accession",
 	"ncbi_identity_pct",
 	"ncbi_coverage_pct",
+	# Which database answered: the local AMR catalog, or NCBI nr as a fallback.
+	# Without this an identity of 68% is uninterpretable -- 68% to the nearest known
+	# resistance protein and 68% to the nearest of all known proteins are very
+	# different claims.
+	"source",
 	"location",
 	"is_novel",
 	"note",
 ]
+
+SOURCE_LOCAL = "AMR catalog (local)"
+SOURCE_REMOTE = "NCBI nr (remote)"
 
 
 def _write_csv(output_path, output_rows):
@@ -199,6 +219,58 @@ def _write_csv(output_path, output_rows):
 		csv_writer = csv.DictWriter(file_handle, fieldnames=FIELDS)
 		csv_writer.writeheader()
 		csv_writer.writerows(output_rows)
+
+
+def local_db_is_ready(local_db):
+	"""True when build_amr_blastdb.py has published a complete database here.
+
+	Checks the .ready marker its build writes last, not merely the presence of the
+	db files: a build that died halfway leaves BLAST-formatted files that would
+	search fine and silently return too few hits."""
+	if not local_db:
+		return False
+	return (Path(local_db).parent / ".ready").is_file()
+
+
+def run_local_blast(query_fasta, local_db, evalue, max_targets, threads=4):
+	"""blastp against the local AMR catalog. Returns (stdout_text, error_or_None)."""
+	if not shutil.which("blastp"):
+		return "", "blastp not found in PATH"
+	blast_command = [
+		"blastp",
+		"-db",
+		str(local_db),
+		"-query",
+		str(query_fasta),
+		"-outfmt",
+		_OUTFMT,
+		"-evalue",
+		str(evalue),
+		"-max_target_seqs",
+		str(max_targets),
+		"-num_threads",
+		str(threads),
+	]
+	try:
+		blast_process = subprocess.run(blast_command, capture_output=True, text=True)
+	except Exception as exception:  # noqa: BLE001 - surface any launch failure as a note
+		return "", f"local BLAST failed to launch: {exception}"
+	if blast_process.returncode != 0:
+		return (
+			blast_process.stdout,
+			f"local blastp exited {blast_process.returncode}: {blast_process.stderr.strip()[:300]}",
+		)
+	return blast_process.stdout, None
+
+
+def write_query_fasta(query_records, destination_handle):
+	for query_record in query_records:
+		destination_handle.write(f">{query_record['qid']}\n")
+		protein_sequence = query_record["sequence"]
+		for sequence_offset in range(0, len(protein_sequence), 80):
+			destination_handle.write(
+				protein_sequence[sequence_offset : sequence_offset + 80] + "\n"
+			)
 
 
 def run_remote_blast(query_fasta, database, evalue, max_targets, timeout):
@@ -242,7 +314,17 @@ def main(argv=None):
 	argument_parser.add_argument(
 		"--full-out", help="full tabular BLAST output (all hits); default: <out>_full.tsv"
 	)
-	argument_parser.add_argument("--database", default="nr")
+	argument_parser.add_argument("--database", default="nr", help="remote fallback database")
+	argument_parser.add_argument(
+		"--local-db",
+		default="",
+		help="BLAST db prefix for the local AMR catalog (searched first); empty to skip",
+	)
+	argument_parser.add_argument(
+		"--remote-fallback",
+		action="store_true",
+		help="send enzymes with no local hit to NCBI (these are the interesting ones)",
+	)
 	argument_parser.add_argument("--evalue", default="1e-5")
 	argument_parser.add_argument("--max-target-seqs", type=int, default=50)
 	argument_parser.add_argument(
@@ -299,34 +381,72 @@ def main(argv=None):
 		)
 
 	with tempfile.NamedTemporaryFile("w", suffix=".fasta", delete=False) as temporary_fasta_file:
-		for query_record in queries:
-			temporary_fasta_file.write(f">{query_record['qid']}\n")
-			protein_sequence = query_record["sequence"]
-			for sequence_offset in range(0, len(protein_sequence), 80):
-				temporary_fasta_file.write(
-					protein_sequence[sequence_offset : sequence_offset + 80] + "\n"
-				)
+		write_query_fasta(queries, temporary_fasta_file)
 		query_fasta = temporary_fasta_file.name
 
-	print(
-		f"→ blast_ncbi: submitting {len(queries)} '{parsed_args.mechanism}' enzyme(s) to NCBI {parsed_args.database}..."
-	)
-	blast_stdout, blast_error = run_remote_blast(
-		query_fasta,
-		parsed_args.database,
-		parsed_args.evalue,
-		parsed_args.max_target_seqs,
-		parsed_args.timeout,
-	)
+	# --- Tier 1: the local AMR catalog. Seconds, and it answers the real question.
+	local_stdout, local_error = "", None
+	best_local = {}
+	if local_db_is_ready(parsed_args.local_db):
+		print(
+			f"→ blast_ncbi: searching {len(queries)} '{parsed_args.mechanism}' enzyme(s) "
+			f"against the local AMR catalog..."
+		)
+		local_stdout, local_error = run_local_blast(
+			query_fasta,
+			parsed_args.local_db,
+			parsed_args.evalue,
+			parsed_args.max_target_seqs,
+		)
+		best_local = parse_blast_tab(local_stdout) if local_stdout else {}
+		print(f"  {len(best_local)}/{len(queries)} matched a known resistance protein")
+	elif parsed_args.local_db:
+		local_error = f"local AMR database not built at {parsed_args.local_db}"
+		print(f"⚠ blast_ncbi: {local_error}")
+
+	# --- Tier 2: NCBI, for the enzymes the catalog could not name. Those are the
+	# genuinely interesting ones, and they are few, so the remote wait buys something.
+	unmatched = [query for query in queries if query["qid"] not in best_local]
+	remote_stdout, remote_error = "", None
+	best_remote = {}
+	if unmatched and parsed_args.remote_fallback:
+		with tempfile.NamedTemporaryFile("w", suffix=".fasta", delete=False) as remote_fasta_file:
+			write_query_fasta(unmatched, remote_fasta_file)
+			remote_query_fasta = remote_fasta_file.name
+		print(
+			f"→ blast_ncbi: {len(unmatched)} enzyme(s) matched nothing in the catalog; "
+			f"falling back to NCBI {parsed_args.database} (timeout {parsed_args.timeout}s)..."
+		)
+		remote_stdout, remote_error = run_remote_blast(
+			remote_query_fasta,
+			parsed_args.database,
+			parsed_args.evalue,
+			parsed_args.max_target_seqs,
+			parsed_args.timeout,
+		)
+		best_remote = parse_blast_tab(remote_stdout) if remote_stdout else {}
+		Path(remote_query_fasta).unlink(missing_ok=True)
+	elif unmatched:
+		print(f"  {len(unmatched)} enzyme(s) unmatched; remote fallback disabled")
+
 	Path(query_fasta).unlink(missing_ok=True)
 
-	# Save the complete BLAST output first -- every hit of every query, verbatim.
-	_write_full(blast_stdout, failure_note=blast_error)
+	# Save the complete BLAST output -- every hit of every query, from both tiers.
+	combined_note = "; ".join(note for note in (local_error, remote_error) if note) or None
+	_write_full(
+		(local_stdout or "") + (remote_stdout or ""),
+		failure_note=combined_note,
+	)
 
-	best = parse_blast_tab(blast_stdout) if blast_stdout else {}
 	output_rows = []
 	for query_record in queries:
-		hit = best.get(query_record["qid"])
+		hit = best_local.get(query_record["qid"])
+		source = SOURCE_LOCAL
+		hit_error = local_error
+		if hit is None:
+			hit = best_remote.get(query_record["qid"])
+			source = SOURCE_REMOTE
+			hit_error = remote_error
 		output_row = {
 			"query_gene": query_record["gene"],
 			"card_identity_pct": query_record["card_identity_pct"],
@@ -341,26 +461,45 @@ def main(argv=None):
 					"ncbi_accession": hit["accession"],
 					"ncbi_identity_pct": round(hit["identity"], 2),
 					"ncbi_coverage_pct": round(hit["coverage"], 2),
+					"source": source,
 					"location": _location_from_title(hit["title"]),
-					# <100% identity anywhere in nr = potentially novel enzyme.
+					# Anything short of an identical match is a candidate variant.
+					# Read this against `source`: from the AMR catalog it means "not an
+					# identical copy of a known resistance protein"; from nr it means
+					# "not identical to anything known at all".
 					"is_novel": "yes" if hit["identity"] < 100.0 else "no",
-					"note": blast_error or "",
+					"note": hit_error or "",
 				}
 			)
 		else:
+			# No hit in the catalog, and nr either was not asked or did not answer.
+			no_hit_note = combined_note or (
+				"no hit in the AMR catalog"
+				if not parsed_args.remote_fallback
+				else "no hit in the AMR catalog or NCBI nr"
+			)
 			output_row.update(
 				{
+					"source": "",
 					"location": "unknown",
 					"is_novel": "unknown",
-					"note": blast_error or "no NCBI hit returned",
+					"note": no_hit_note,
 				}
 			)
 		output_rows.append(output_row)
+	blast_error = combined_note
 
 	_write_csv(parsed_args.out, output_rows)
+	from_local = sum(1 for row in output_rows if row.get("source") == SOURCE_LOCAL)
+	from_remote = sum(1 for row in output_rows if row.get("source") == SOURCE_REMOTE)
+	unresolved = sum(1 for row in output_rows if not row.get("source"))
+	print(
+		f"  sources: {from_local} from the AMR catalog, {from_remote} from NCBI, "
+		f"{unresolved} unresolved"
+	)
 	if blast_error:
 		print(
-			f"⚠ blast_ncbi: {blast_error} — wrote {len(output_rows)} row(s) with the note (non-fatal). Full: {full_output_path}"
+			f"⚠ blast_ncbi: {blast_error}; wrote {len(output_rows)} row(s) with the note (non-fatal). Full: {full_output_path}"
 		)
 	else:
 		novel = sum(1 for output_row in output_rows if output_row.get("is_novel") == "yes")

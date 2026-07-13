@@ -5,6 +5,10 @@ config/samples.csv
 config/jobs/
 config/api_endpoints.json
 .snakemake/
+# The AMR BLAST database is BUILT in the image (see Dockerfile) so that the weekly
+# rebuild refreshes it. A developer's local copy must not be copied in on top of the
+# freshly built one -- that is exactly how a stale database would survive a refresh.
+resources/blastdb/
 .git/
 .bvbrc_token
 __pycache__/

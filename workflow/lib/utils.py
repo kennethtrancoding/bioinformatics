@@ -15,9 +15,7 @@ from typing import Any, Callable, Optional
 import json
 
 
-# ============================================================================
 # Logging Setup
-# ============================================================================
 
 def setup_logger(logger_name: str, log_file: Optional[str] = None, level=logging.INFO) -> logging.Logger:
     """
@@ -39,12 +37,10 @@ def setup_logger(logger_name: str, log_file: Optional[str] = None, level=logging
         datefmt='%Y-%m-%d %H:%M:%S'
     )
 
-    # Console handler
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setFormatter(formatter)
     logger.addHandler(console_handler)
 
-    # File handler (if specified)
     if log_file:
         log_path = Path(log_file)
         (log_path.parent if log_path.parent != Path("") else Path(".")).mkdir(parents=True, exist_ok=True)
@@ -55,9 +51,7 @@ def setup_logger(logger_name: str, log_file: Optional[str] = None, level=logging
     return logger
 
 
-# ============================================================================
 # Retry Decorator
-# ============================================================================
 
 def retry(max_attempts: int = 3, delay: float = 2.0, backoff: float = 2.0, exceptions: tuple = (Exception,)):
     """
@@ -93,9 +87,7 @@ def retry(max_attempts: int = 3, delay: float = 2.0, backoff: float = 2.0, excep
     return decorator
 
 
-# ============================================================================
 # File Operations
-# ============================================================================
 
 def compute_md5(file_path: str, chunk_size: int = 8192) -> str:
     """
@@ -176,9 +168,7 @@ def safe_symlink(source_path: str, dst: str, logger=None) -> bool:
         return False
 
 
-# ============================================================================
 # Archiving
-# ============================================================================
 
 def zip_directory(directory: str, arc_root: str) -> io.BytesIO:
     """
@@ -201,9 +191,7 @@ def zip_directory(directory: str, arc_root: str) -> io.BytesIO:
     return buffer
 
 
-# ============================================================================
 # Data Parsing
-# ============================================================================
 
 def load_json_safe(file_path: str, logger=None) -> dict:
     """
@@ -255,9 +243,7 @@ def save_json(json_data: dict, file_path: str, logger=None) -> bool:
         return False
 
 
-# ============================================================================
 # Polling / Async Helpers
-# ============================================================================
 
 def wait_for_condition(
     condition_fn: Callable,
@@ -299,6 +285,5 @@ def wait_for_condition(
 
 
 if __name__ == "__main__":
-    # Example usage
     logger = setup_logger("utils_test", log_file="logs/utils_test.log")
     logger.info("Logging setup successful")

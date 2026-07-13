@@ -7,13 +7,10 @@ import os
 import pandas as pd
 from pathlib import Path
 
-# ============================================================================
 # Configuration
-# ============================================================================
 
 configfile: "config/config.yaml"
 
-# Load sample manifest
 SAMPLES = {}
 if os.path.exists(config['samples_manifest']):
     samples_dataframe = pd.read_csv(config['samples_manifest'])
@@ -25,11 +22,10 @@ else:
 SAMPLE_IDS = list(SAMPLES.keys())
 
 
-# ============================================================================
 # Include Rule Files
-# ============================================================================
 
 include: "rules/setup.smk"
+include: "rules/raw.smk"
 include: "rules/qc.smk"
 include: "rules/bvbrc.smk"
 include: "rules/resistance.smk"
@@ -37,12 +33,9 @@ include: "rules/blast.smk"
 include: "rules/mlst.smk"
 include: "rules/mobile_elements.smk"
 include: "rules/summary.smk"
-include: "rules/cleanup.smk"
 
 
-# ============================================================================
 # Final Targets
-# ============================================================================
 
 def get_all_outputs():
     """Define all final outputs for the workflow."""
@@ -78,8 +71,9 @@ def get_all_outputs():
         workflow_targets.append(f"{config['results_dir']}/{sample_id}/06_mobile_elements/me_summary.csv")
         workflow_targets.append(f"{config['results_dir']}/{sample_id}/06_mobile_elements/{sample_id}_arg_mge_colocation.csv")
 
-        # Raw FASTQ deleted once nothing else needs it (see rules/cleanup.smk)
-        workflow_targets.append(f"{config['results_dir']}/{sample_id}/.raw_deleted")
+    # Raw FASTQ is no longer deleted by a rule of its own: it is a temp() output of
+    # fetch_raw_read (rules/raw.smk), so Snakemake removes each file as soon as the
+    # last rule that reads it is done. Nothing to ask for here.
 
     # Master report: one CSV for the whole batch, not per-sample
     workflow_targets.append(f"{config['results_dir']}/master_report.csv")

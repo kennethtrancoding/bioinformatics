@@ -76,16 +76,96 @@ Open `http://127.0.0.1:5001`.
 Typical browser workflow:
 
 1. Upload one R1/R2 pair, or import a folder containing paired FASTQ files.
-2. For a paired upload, enter BV-BRC credentials with the upload. For a bulk
-   import, open that job's API Settings page afterward and log in there.
-3. Save the generated 12-character job ID.
-4. Click run.
+   (Pasting a OneDrive/Google Drive share link is currently disabled — see
+   [Cloud Imports](#cloud-imports-onedrive--google-drive).)
+2. Add files through any combination of the pair and folder methods.
+3. Enter BV-BRC credentials, then press Run Pipeline after every upload finishes.
+4. Save the generated 12-character job ID.
 5. Use the job ID lookup to return to the batch, view per-sample reports,
    download individual ZIPs, download all results, or download the master
    report.
 
 Job IDs are the access boundary for a batch. The app also supports optional HTTP
 Basic Auth for public deployments through `APP_USERNAME` and `APP_PASSWORD`.
+
+### Building One Batch From Several Uploads
+
+The browser reserves one job automatically when the first Add action is pressed.
+Every upload method reuses that job, so a batch can be assembled from any mix of
+them — a folder import for the bulk of a run, and individual pairs on top (plus,
+when cloud import is enabled, a cloud pull for isolates that arrived late). They
+may be in flight at the same time, and every later Add on the page continues
+filling the same batch. Once all
+files have arrived, press Run Pipeline.
+
+Re-adding an isolate that is already in the batch replaces its rows rather than
+duplicating them (`updated` in the response, not `added`), so a re-upload to fix
+a bad file is safe.
+
+Each upload is a read-modify-write of one `samples.csv`, so concurrent adds to
+the same job are serialized on a per-job lock; adds to _different_ jobs never
+block each other. Samples cannot be added to a job while its pipeline is running
+or queued (`409`) — the run reads the manifest and the FASTQ it points at, so
+changing them underneath would either be silently ignored or read half-written.
+
+### Timing
+
+The job panel reports how long each upload took, broken down by the method that
+brought it in, and how long the run took. A run in progress shows elapsed time
+(recomputed locally each second between the 3-second status polls); a finished
+run shows its total duration. `/job/<id>` returns this as `uploads[]` and
+`run_status.started_at` / `run_status.finished_at`.
+
+### Cloud Imports (OneDrive / Google Drive)
+
+> **Disabled.** The `/cloud-import` routes in `frontend.py`, the fieldset in
+> `templates/index.html` and the handlers in `static/app.js` are commented out, so
+> the share-link box does not appear and the routes return 404. Uploading a pair
+> and importing a folder are unaffected. `workflow/lib/cloud_import.py` and its
+> unit tests are untouched; re-enabling means uncommenting those three call sites.
+> The rest of this section describes the feature as it works when enabled.
+
+A sequencing company usually leaves the run in a cloud folder and mails a share
+link. Pasting that link into "Import From OneDrive or Google Drive" makes the
+_server_ fetch the files, so tens of GB never have to be pulled down to a laptop
+and pushed back up again.
+
+The link must be shared as "anyone with the link" and may point at a folder or a
+single FASTQ file. What arrives is treated exactly like a browser folder upload:
+the same R1/R2 pairing, the same MD5 verification against the company's
+`DNA Sequencing Stats.xlsx`, the same job ID, the same Samples table, the same
+`/run`. Nothing downstream can tell a cloud-imported job from an uploaded one.
+
+The download runs in the background because a real run folder takes far longer
+than an HTTP request can be held open. `POST /cloud-import` returns `202` with a
+job ID immediately; the page then polls `/cloud-import/status` and shows the
+batch when it lands.
+
+Because the URL comes from the user but the _server_ is what requests it, an
+unfiltered version of this feature is an SSRF hole aimed at the instance metadata
+service. Requests are therefore restricted to Google Drive and OneDrive/SharePoint
+hosts, and **every redirect hop is re-checked against that allowlist** — a
+`1drv.ms` link bounces through two hosts before reaching the content server, so
+validating only the pasted URL would not be a guard at all. The bytes that come
+back are still untrusted, so only FASTQ files and the `.xlsx` stats workbook are
+pulled, each is size-capped, and each FASTQ must parse as FASTQ before it is
+allowed into the manifest — both providers answer an unshared link with a `200`
+and an HTML sign-in page rather than an HTTP error, and that page must never land
+on disk as a `.fastq.gz`.
+
+| Variable                       | Default | Meaning                                                        |
+| ------------------------------ | ------- | -------------------------------------------------------------- |
+| `GOOGLE_DRIVE_API_KEY`         | unset   | Required to list a Drive **folder**. Without it only single-file Drive links work. |
+| `MS_GRAPH_ACCESS_TOKEN`        | unset   | Required for OneDrive for **Business**/SharePoint links. Consumer OneDrive links work without it. |
+| `MAX_CONCURRENT_CLOUD_IMPORTS` | `2`     | Server-side pulls running at once; further requests get `429`.  |
+| `CLOUD_IMPORT_MAX_FILE_BYTES`  | 20 GiB  | Per-file cap. An oversized file is skipped with a warning.      |
+| `CLOUD_IMPORT_MAX_TOTAL_BYTES` | 200 GiB | Cap for one import. Exceeding it aborts the import.             |
+| `CLOUD_IMPORT_MAX_FILES`       | `500`   | Most files one link may hold.                                   |
+| `CLOUD_IMPORT_ALLOWED_HOSTS`   | unset   | Extra **content** hosts to accept on a redirect hop. Does not widen what counts as a share link. |
+
+Both credentials are optional and read-only: a Drive API key with the Drive API
+enabled is enough for public folders, and neither is needed to try the feature
+with a consumer OneDrive link.
 
 ### Web App Data Layout
 
@@ -94,6 +174,7 @@ The web app stores each batch under a job ID:
 ```text
 data/raw_fastq/<JOB_ID>/              uploaded/imported FASTQ files
 config/jobs/<JOB_ID>/samples.csv      Snakemake sample manifest
+config/jobs/<JOB_ID>/uploads.json     every upload that filled this job, and how long each took
 config/jobs/<JOB_ID>/checksums.json   optional imported MD5 checksums
 config/jobs/<JOB_ID>/.bvbrc_token     private BV-BRC token for this job only
 config/jobs/<JOB_ID>/api_endpoints.json optional trusted endpoint overrides
@@ -132,11 +213,58 @@ and `202` with `queued: true` and a `queue_position` when it is queued. `/status
 reports `queued` and `queue_position` while a job waits. Aborting a queued job
 cancels it without ever starting it.
 
-Because the queue lives in the web process's memory, **gunicorn must stay at
+Because the queue is enforced in the web process's memory, **gunicorn must stay at
 `workers = 1`** (see `gunicorn.conf.py`). With multiple workers each would
 enforce the cap against only its own slots, so the real limit would silently
 become `workers × MAX_CONCURRENT_PIPELINES` — precisely the overload the cap
 exists to prevent. Use threads, not workers, for request concurrency.
+
+### Where raw reads live
+
+Uploaded FASTQ is streamed to S3 **as it arrives** and the local copy is then dropped.
+The pipeline fetches each read back from S3 immediately before the rules that need it
+(`fetch_raw_read` in `workflow/rules/raw.smk`), and that rule's output is `temp()`, so
+Snakemake deletes it again the moment the last reader — `validate_fastq` and
+`bvbrc_upload_reads` — is done.
+
+The point is that **peak disk tracks the samples in flight, not the size of the
+batch.** Reads used to sit on disk from upload until the run finished, and the reads
+of every *queued* job sat there too, doing nothing: a 50-sample batch held ~19 GB of
+FASTQ for hours. Now it holds well under a gigabyte.
+
+This is why `validate_fastq` and `bvbrc_upload_reads` declare the reads as `input:`
+rather than `params:`. As params, Snakemake had no dependency edge to the files — it
+could not sequence a fetch before them, and could not tell when they were finished
+with. (The old `rules/cleanup.smk` existed for exactly that reason: a hand-written
+rule that waited on the two rules' *outputs* and unlinked the reads itself. It was a
+hand-rolled `temp()`, and it is gone.)
+
+Without `RESULTS_S3_BUCKET` set, none of this applies: the local copy is the only
+copy, so it is kept and the fetch rule never fires. **With** a bucket set, S3 is the
+system of record for raw reads — a run cannot start while S3 is unreachable, where
+previously it could.
+
+### Runs and restarts
+
+A run's Snakemake process is a child of the web process, so anything that takes
+the web process down — a crash, a redeploy, the weekly database refresh — takes
+the run with it. Both halves of that are handled:
+
+- **Planned restarts drain first.** `deploy/refresh-databases.sh` sets a drain
+  flag before it restarts the service. While it is set, new runs are queued rather
+  than started (even when slots are free), and the script waits for the running
+  ones to finish before restarting — or gives up and leaves the databases
+  untouched, rather than killing a multi-hour assembly. See
+  [DATABASE_UPDATES.md](DATABASE_UPDATES.md).
+- **Unplanned restarts are reconciled on boot.** The queue is persisted to
+  `config/jobs/.pipeline_queue.json` (on the config volume) and reloaded at
+  startup, so queued runs start rather than disappear. A run that was *executing*
+  cannot be resumed — it is recorded as failed, with an explanation, so it surfaces
+  as a failure the user can re-run instead of a run that silently stops reporting.
+
+That recovery runs from gunicorn's `post_worker_init` hook, not at import: tests
+import `frontend` before repointing it at a temp directory, so reconciling at
+import time would scan the real `results/` and fail whatever run was in progress.
 
 Concurrent runs pass `--nolock` to Snakemake. Its working-directory lock is
 unnecessary here (every path a run writes is scoped to `results/<JOB_ID>/`, so
@@ -348,6 +476,7 @@ workflow/scripts/*.py          Rule implementation scripts
 workflow/lib/jobs.py           Job ID paths and validation
 workflow/lib/bvbrc_client.py   BV-BRC API client
 workflow/lib/import_samples.py Folder import and FASTQ pairing
+workflow/lib/cloud_import.py   OneDrive/Google Drive share-link pulls
 workflow/lib/preprocess.py     FASTQ/manifest/checksum helpers
 workflow/lib/utils.py          Logging, JSON, retry, and file helpers
 templates/                     Web UI templates
@@ -397,6 +526,26 @@ will start automatically when a slot frees. This is the server protecting itself
 from being overloaded by simultaneous users, not an error. Raise
 `MAX_CONCURRENT_PIPELINES` if the host has cores and RAM to spare (see
 [Concurrent Runs](#concurrent-runs)), or abort the queued run to cancel it.
+
+### A OneDrive/Google Drive link will not import
+
+The message on the page says which of these it is:
+
+- _"Only Google Drive and OneDrive/SharePoint https:// share links can be
+  imported"_ — the host is not on the allowlist. Copy the `https://` link from
+  the browser's address bar rather than a forwarded or shortened one.
+- _"came back as a web page instead of a file"_ / _"refused access"_ — the item
+  is not shared with "anyone with the link", so the provider served a sign-in
+  page instead of the bytes.
+- _"needs a Drive API key"_ — set `GOOGLE_DRIVE_API_KEY`; listing a Drive folder
+  is not possible anonymously. A link to a single file still works without it.
+- _"also needs MS_GRAPH_ACCESS_TOKEN"_ — the link is OneDrive for Business or
+  SharePoint, which cannot be read anonymously.
+- _"Nothing behind that link is a FASTQ file"_ — the folder holds no `.fastq`,
+  `.fq`, `.fastq.gz`, or `.fq.gz`. Only those and the `.xlsx` stats workbook are
+  ever downloaded.
+
+See [Cloud Imports](#cloud-imports-onedrive--google-drive).
 
 ### Results disappeared
 

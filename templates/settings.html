@@ -5,7 +5,11 @@
 		<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
 	</head>
 	<body>
-		<nav><a href="{{ url_for('analysis') }}">Analysis</a> | <b>API Settings</b></nav>
+		<!-- job_id is None on the bare page, and url_for drops it, so this is just
+		     "/" there and "/?job_id=..." once a job is in play. -->
+		<nav>
+			<a href="{{ url_for('analysis', job_id=job_id) }}">Analysis</a> | <b>API Settings</b>
+		</nav>
 
 		<h1>API Settings</h1>
 		{% if not job_id %}
@@ -22,7 +26,7 @@
 		<p class="error-text">{{ login_error }}</p>
 		{% endif %}
 
-		<form method="POST" action="{{ url_for('settings') }}">
+		<form method="POST" action="{{ url_for('settings', job_id=job_id) }}">
 			<input type="hidden" name="job_id" value="{{ job_id }}" />
 			<fieldset>
 				<legend>BV-BRC Login</legend>
@@ -54,8 +58,8 @@
 					{% endif %}
 					<tr>
 						<td>
-							<b>{{ ep.name }}</b>{% if ep.is_override %}
-							<span class="badge degraded">custom</span>{% endif %}
+							<b>{{ ep.name }}</b>{% if ep.is_override %} <span>(custom)</span>{%
+							endif %}
 						</td>
 						<td>
 							<input type="text" name="{{ ep.key }}" value="{{ ep.url }}" size="44" />
@@ -73,6 +77,10 @@
 			<input type="hidden" name="job_id" value="{{ job_id }}" />
 			<button type="submit">Reset to defaults</button>
 		</form>
+
+		<p>
+			<a href="{{ url_for('analysis', job_id=job_id) }}">Back to job {{ job_id }}</a>
+		</p>
 
 		<h1>Service Status</h1>
 		<button id="check">Check all services</button>

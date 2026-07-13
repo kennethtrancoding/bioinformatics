@@ -72,13 +72,30 @@ RUN set -eux; \
         --config job_id=IMGBUILD0001 \
                   samples_manifest=config/jobs/IMGBUILD0001/samples.csv \
                   results_dir=results/IMGBUILD0001; \
+    conda run --no-capture-output -n bioinformatics snakemake \
+        --use-conda --cores 1 --nolock \
+        --config job_id=IMGBUILD0001 \
+                  samples_manifest=config/jobs/IMGBUILD0001/samples.csv \
+                  results_dir=results/IMGBUILD0001 \
+        resources/blastdb/amr/.ready; \
     rm -rf config/jobs/IMGBUILD0001 results/IMGBUILD0001 /tmp/imgbuild; \
     mamba clean -afy
 
+# The second snakemake call above is not part of the env warm-up: it actually RUNS
+# rule build_amr_blast_db, which downloads NCBI's AMRFinderPlus reference protein
+# catalog (~10k proteins, ~5 MB) and formats it with makeblastdb. It is invoked
+# through snakemake rather than directly because makeblastdb lives in the *blast*
+# per-rule env (just created above), not in the `bioinformatics` env that runs Flask.
+#
+# The catalog lands in resources/blastdb/, inside the image rather than on a volume,
+# for the same reason CARD and MGEdb do (see DATABASE_UPDATES.md): the image IS the
+# database, so the weekly rebuild in deploy/refresh-databases.sh refreshes all three
+# in a single pass.
+
 # Last, so a code-only change rebuilds just this layer and reuses every conda
 # env above. Safe to re-copy workflow/ and config/ over themselves: .snakemake/
-# (which holds the envs the pre-build just created) is in .dockerignore, so this
-# cannot clobber the warmed cache.
+# (the envs the pre-build just created) and resources/blastdb/ (the AMR database it
+# just built) are both in .dockerignore, so this cannot clobber either.
 COPY . .
 
 ENV PORT=5001

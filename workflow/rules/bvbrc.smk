@@ -6,15 +6,22 @@ Upload reads, run genome analysis, download assembly
 rule bvbrc_upload_reads:
     """
     Step 4: Upload paired-end reads to BV-BRC workspace
+
+    The reads are `input`, not `params` -- see rules/raw.smk. This rule and
+    validate_fastq are the only readers of a sample's FASTQ, so once both are done
+    Snakemake deletes it: this is the last thing that needs the raw data locally.
     """
+    input:
+        first_read = lambda wildcards: SAMPLES[wildcards.sample]['R1_path'],
+        second_read = lambda wildcards: SAMPLES[wildcards.sample]['R2_path']
     params:
-        first_read_path = lambda wildcards: SAMPLES[wildcards.sample]['R1_path'],
-        second_read_path = lambda wildcards: SAMPLES[wildcards.sample]['R2_path'],
         sample_id = lambda wildcards: wildcards.sample
     output:
         upload_log = f"{config['results_dir']}/{{sample}}/02_assembly/upload.log"
     log:
         f"{config['results_dir']}/logs/{{sample}}_bvbrc_upload.log"
+    group:
+        "sample_reads"
     script:
         "../scripts/bvbrc_upload.py"
 

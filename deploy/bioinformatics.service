@@ -7,6 +7,11 @@
 ##
 ## Secrets/config live in /etc/bioinformatics/app.env on the host (not in
 ## this repo) -- see the deployment guide for its contents.
+##
+## The container publishes to 127.0.0.1 only: Caddy terminates TLS on 443 and
+## proxies to it (deploy/Caddyfile, deploy/caddy.md). Publishing to 0.0.0.0
+## instead would re-expose the app over plaintext HTTP -- including its Basic
+## Auth password -- to anyone who can reach the instance on 5001.
 
 [Unit]
 Description=Bioinformatics pipeline web app
@@ -29,9 +34,10 @@ EnvironmentFile=/etc/bioinformatics/app.env
 # land in S3.
 ExecStartPre=-/usr/bin/docker rm -f bioinformatics
 ExecStart=/usr/bin/docker run --name bioinformatics --rm \
-    -p 5001:5001 \
+    -p 127.0.0.1:5001:5001 \
     -e APP_PASSWORD \
     -e SECRET_KEY \
+    -e TRUSTED_PROXY_HOPS \
     -e RESULTS_S3_BUCKET \
     -e MAX_CONCURRENT_PIPELINES \
     -e PIPELINE_CORES \

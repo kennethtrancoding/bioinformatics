@@ -18,3 +18,14 @@ timeout = 1800
 accesslog = "-"  # log to stdout (captured by the container/service manager)
 errorlog = "-"
 loglevel = "info"
+
+
+def post_worker_init(worker):
+	"""Recover the job state the previous process died holding: mark runs killed
+	mid-flight as failed, and restart runs that were queued when it went down.
+
+	This runs in the worker, not the arbiter, because the queue and the running set
+	it rebuilds are worker-local (which is also why `workers` above must stay 1)."""
+	from frontend import run_startup_recovery
+
+	run_startup_recovery()

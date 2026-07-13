@@ -15,39 +15,33 @@ from workflow.lib.utils import setup_logger
 logger = setup_logger("bvbrc_upload", snakemake.log[0])
 
 sample_id = snakemake.params.sample_id
-first_read_path = snakemake.params.first_read_path
-second_read_path = snakemake.params.second_read_path
+first_read_path = snakemake.input.first_read
+second_read_path = snakemake.input.second_read
 workspace_name = snakemake.config["bvbrc"]["workspace_name"]
 output_log = snakemake.output.upload_log
 
 Path(output_log).parent.mkdir(parents=True, exist_ok=True)
 
-# Initialize client
 client = BVBRCClient(
 	token_file=snakemake.config["bvbrc"]["token_file"],
 	job_id=snakemake.config.get("job_id"),
 )
 
-# Authenticate if needed
 if not client.is_authenticated():
 	logger.info("BV-BRC authentication required")
 	if not client.login_interactive():
 		raise RuntimeError("BV-BRC authentication failed")
 
-# Get or create workspace
 workspace = client.get_or_create_workspace(workspace_name)
 if not workspace:
 	raise RuntimeError(f"Failed to create/access workspace: {workspace_name}")
 
 logger.info(f"Using workspace: {workspace}")
 
-# Upload paired reads
 success, r1_remote, r2_remote = client.upload_paired_reads(first_read_path, second_read_path, sample_id)
 
 if not success:
 	raise RuntimeError(f"Failed to upload paired reads for {sample_id}")
-
-# Save upload results to log
 
 upload_data = {
  "sample_id": sample_id,
