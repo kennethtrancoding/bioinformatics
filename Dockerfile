@@ -73,11 +73,11 @@ RUN set -eux; \
                   samples_manifest=config/jobs/IMGBUILD0001/samples.csv \
                   results_dir=results/IMGBUILD0001; \
     conda run --no-capture-output -n bioinformatics snakemake \
+        resources/blastdb/amr/.ready \
         --use-conda --cores 1 --nolock \
         --config job_id=IMGBUILD0001 \
                   samples_manifest=config/jobs/IMGBUILD0001/samples.csv \
-                  results_dir=results/IMGBUILD0001 \
-        resources/blastdb/amr/.ready; \
+                  results_dir=results/IMGBUILD0001; \
     rm -rf config/jobs/IMGBUILD0001 results/IMGBUILD0001 /tmp/imgbuild; \
     mamba clean -afy
 
