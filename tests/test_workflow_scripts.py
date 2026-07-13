@@ -51,7 +51,7 @@ def run_script(name, **kw):
     runpy.run_path(str(SCRIPTS / name), init_globals={"snakemake": FakeSnakemake(**kw)})
 
 
-# ------------------------------------------------------------------ fixtures
+# Fixtures
 CONTIG = "assembly_contig_1"
 
 
@@ -135,7 +135,7 @@ class TestAnalysisChain(unittest.TestCase):
             "contig_n50": 210344, "contig_l50": 8,
         }]))
 
-    # -------------------------------------------------- individual scripts
+    # Individual scripts
     def test_01_qc_validate(self):
         r1 = WORK / "S1_R1.fastq.gz"
         r2 = WORK / "S1_R2.fastq.gz"
@@ -146,7 +146,10 @@ class TestAnalysisChain(unittest.TestCase):
         metadata = WORK / "01_raw_qc" / "metadata.json"
         run_script(
             "qc_validate.py",
-            params=NS(first_read_path=str(r1), second_read_path=str(r2), sample_id="S1"),
+            # The reads are inputs now, not params: that is what lets Snakemake fetch
+            # them from S3 first and delete them after (workflow/rules/raw.smk).
+            input=NS(first_read=str(r1), second_read=str(r2)),
+            params=NS(sample_id="S1"),
             output=NS(report=report, metadata=metadata),
             config={"samples_manifest": str(ROOT / "config" / "samples.csv")},
         )
@@ -315,7 +318,7 @@ class TestAnalysisChain(unittest.TestCase):
             params=NS(sample_ids=["S1"]),
             input=NS(card=[str(WORK / "03_resistance" / "rgi_results.csv")],
                      mlst=[str(WORK / "05_mlst" / "mlst_results.json")],
-                     mobile_element_finder=[str(WORK / "06_mobile_elements" / "me_summary.csv")],
+                     mobile_element_finder=[str(self.mef_csv)],
                      colocation=[str(WORK / "06_mobile_elements" / "S1_arg_mge_colocation.json")]),
             output=NS(csv_report=master),
         )
@@ -325,8 +328,48 @@ class TestAnalysisChain(unittest.TestCase):
         self.assertEqual(row["sequence_type"], "114")
         self.assertIn("blaCTX-M-15", row["beta_lactamase_genes"])
         self.assertIn("aac(6')-Ib", row["antibiotic_inactivation_genes"])
-        self.assertEqual(row["mobile_elements_total"], "2")
+        # The elements are named now, not merely counted.
+        self.assertEqual(row["mobile_element_genes"], "IS26; Tn3")
         self.assertIn("blaCTX-M-15", row["mobile_element_linked_resistance_genes"])
+
+    def test_09b_master_report_names_repeated_elements_with_multiplicity(self):
+        """Two copies of one element must not collapse into a single name: naming
+        the genes should not quietly lose the count the old column carried."""
+        repeated = WORK / "06_mobile_elements" / "repeated.csv"
+        repeated.write_text(
+            "# mefinder result\n"
+            "mge_no,name,type,contig,start,end\n"
+            "1,MITEEc1,mite,c1,10,100\n"
+            "2,MITEEc1,mite,c1,500,600\n"
+            "3,ISEhe3,insertion sequence,c1,900,1700\n"
+        )
+        master = TMP_ROOT / "results" / "SCRIPTSMOKE" / "master_repeated.csv"
+        run_script(
+            "generate_master_report.py",
+            params=NS(sample_ids=["S1"]),
+            input=NS(card=[str(WORK / "03_resistance" / "rgi_results.csv")],
+                     mlst=[str(WORK / "05_mlst" / "mlst_results.json")],
+                     mobile_element_finder=[str(repeated)],
+                     colocation=[str(WORK / "06_mobile_elements" / "S1_arg_mge_colocation.json")]),
+            output=NS(csv_report=master),
+        )
+        row = next(csv.DictReader(master.open()))
+        self.assertEqual(row["mobile_element_genes"], "ISEhe3; MITEEc1 (x2)")
+
+    def test_09c_master_report_says_none_when_no_elements_were_called(self):
+        empty = WORK / "06_mobile_elements" / "empty.csv"
+        empty.write_text("# mefinder result\nmge_no,name,type,contig,start,end\n")
+        master = TMP_ROOT / "results" / "SCRIPTSMOKE" / "master_empty.csv"
+        run_script(
+            "generate_master_report.py",
+            params=NS(sample_ids=["S1"]),
+            input=NS(card=[str(WORK / "03_resistance" / "rgi_results.csv")],
+                     mlst=[str(WORK / "05_mlst" / "mlst_results.json")],
+                     mobile_element_finder=[str(empty)],
+                     colocation=[str(WORK / "06_mobile_elements" / "S1_arg_mge_colocation.json")]),
+            output=NS(csv_report=master),
+        )
+        self.assertEqual(next(csv.DictReader(master.open()))["mobile_element_genes"], "none")
 
     def test_10_master_report_neutralizes_csv_formula_injection(self):
         """A gene name from an external DB must not execute in Excel."""

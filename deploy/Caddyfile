@@ -1,0 +1,39 @@
+# Caddy serves the public HTTPS endpoint and proxies to the app container, which
+# listens only on 127.0.0.1:5001 and is not reachable from the internet.
+#
+# Install on the EC2 host:
+#
+#   sudo dnf install -y caddy
+#   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
+#   sudo systemctl enable --now caddy
+#
+# See deploy/caddy.md for the full first-run procedure (DNS, security group).
+
+# Caddy requests the Let's Encrypt certificate for exactly this name, and proves
+# ownership over port 80 -- so this must stay in sync with the A record, and 80
+# must stay open in the security group even though nothing is served on it.
+bioinformatics.kennethtrancoding.com {
+	# Plain HTTP to gunicorn. Caddy terminates TLS; the app never sees it.
+	# 127.0.0.1 (not the container name or 0.0.0.0) because the container
+	# publishes only to loopback -- see deploy/bioinformatics.service.
+	reverse_proxy 127.0.0.1:5001 {
+		# Long-polled /status calls and 30-minute FASTQ uploads must not be cut
+		# off mid-flight. Caddy streams request bodies with no size cap by
+		# default, which is what lets multi-hundred-MB uploads through at all.
+		flush_interval -1
+	}
+
+	# Genomic results and Basic Auth credentials: tell browsers never to try
+	# this host over plaintext again. Only safe because every name Caddy serves
+	# here is one it holds a certificate for.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		-Server
+	}
+
+	encode zstd gzip
+
+	log {
+		output file /var/log/caddy/access.log
+	}
+}

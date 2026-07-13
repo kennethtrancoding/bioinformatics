@@ -12,7 +12,6 @@ metrics_file = snakemake.output.metrics
 
 Path(metrics_file).parent.mkdir(parents=True, exist_ok=True)
 
-# Load report
 with open(genome_report_file) as file_handle:
 	report = json.load(file_handle)
 
@@ -29,7 +28,6 @@ metrics = {
 	"l50": report.get("contig_l50", "N/A"),
 }
 
-# Write CSV
 with open(metrics_file, "w") as file_handle:
 	writer = csv.DictWriter(file_handle, fieldnames=metrics.keys())
 	writer.writeheader()

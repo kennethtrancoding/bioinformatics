@@ -228,7 +228,6 @@ def main(argv=None):
 		"resistance_genes_total": len(colocation_rows),
 		"resistance_genes_on_mge": len(linked_rows),
 		"proximity_bp": parsed_args.proximity_bp,
-		# de-dup gene names for the headline list
 		"mobile_element_linked_genes": sorted(
 			{colocation_row["resistance_gene"] for colocation_row in linked_rows}
 		),

@@ -27,13 +27,11 @@ def json_to_html_table(rgi_data):
 
 	html = "<table>\n"
 
-	# header
 	html += "  <tr><th></th>"
 	for column_name in column_names:
 		html += f"<th>{escape_html(column_name)}</th>"
 	html += "</tr>\n"
 
-	# rows
 	for output_row, row_values in rgi_data.items():
 		html += f"  <tr><th>{escape_html(output_row)}</th>"
 		for column_name in column_names:

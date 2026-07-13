@@ -2,11 +2,12 @@
 Generate Master Report Script (Snakemake rule: generate_master_report)
 Generate one CSV summarizing the whole batch: per-isolate species (+ confidence),
 MLST sequence type, beta-lactamase genes, antibiotic-inactivation genes,
-and mobile-element totals.
+and the mobile elements themselves.
 """
 
 import csv
 import json
+from collections import Counter
 from pathlib import Path
 
 sample_ids = snakemake.params.sample_ids
@@ -53,17 +54,32 @@ def _resistance_summary(input_path):
 	return sorted(set(beta_lactamase_genes)), sorted(set(inactivation_genes))
 
 
-def _mobile_element_total(input_path):
+def _mobile_element_genes(input_path):
+	"""Every mobile element mefinder called, by name (ISEhe3, MITEEc1, ...).
+
+	Reads mefinder's own call table rather than the type-count summary: the summary
+	says how many insertion sequences and MITEs there are, and a count cannot tell
+	you *which* element you are holding. mefinder writes several '#' comment lines
+	ahead of the header, so they have to be stripped -- csv would otherwise read the
+	first comment line as the field names."""
 	if not Path(input_path).exists():
-		return 0
+		return []
 	with open(input_path, newline="") as file_handle:
-		for csv_row in csv.DictReader(file_handle):
-			if csv_row.get("element_type") == "TOTAL":
-				try:
-					return int(csv_row.get("count") or 0)
-				except ValueError:
-					return 0
-	return 0
+		data_lines = [line for line in file_handle if not line.startswith("#")]
+	element_names = [
+		(csv_row.get("name") or "").strip()
+		for csv_row in csv.DictReader(data_lines)
+		if (csv_row.get("name") or "").strip()
+	]
+	# One element can be called more than once (two copies of MITEEc1, say). Collapse
+	# the repeats but keep their multiplicity, so the cell still carries the total the
+	# old mobile_elements_total column reported -- naming the genes should not cost
+	# the count.
+	name_counts = Counter(element_names)
+	return [
+		element_name if name_counts[element_name] == 1 else f"{element_name} (x{name_counts[element_name]})"
+		for element_name in sorted(name_counts)
+	]
 
 
 def _mge_linked_genes(input_path):
@@ -87,7 +103,7 @@ fieldnames = [
  "sequence_type",
  "beta_lactamase_genes",
  "antibiotic_inactivation_genes",
- "mobile_elements_total",
+ "mobile_element_genes",
  "mobile_element_linked_resistance_genes",
 ]
 
@@ -98,6 +114,7 @@ for sample_id, card_path, mlst_path, mobile_element_finder_path, colocation_path
 	mlst_data = _mlst_data(mlst_path)
 	beta_lactamase_genes, inactivation_genes = _resistance_summary(card_path)
 	linked_genes = _mge_linked_genes(colocation_path)
+	mobile_element_genes = _mobile_element_genes(mobile_element_finder_path)
 	report_rows.append(
 	 {
 	  "isolate_id": sample_id,
@@ -108,7 +125,7 @@ for sample_id, card_path, mlst_path, mobile_element_finder_path, colocation_path
 	  "sequence_type": mlst_data.get("st", "N/A"),
 	  "beta_lactamase_genes": "; ".join(beta_lactamase_genes) if beta_lactamase_genes else "none",
 	  "antibiotic_inactivation_genes": "; ".join(inactivation_genes) if inactivation_genes else "none",
-	  "mobile_elements_total": _mobile_element_total(mobile_element_finder_path),
+	  "mobile_element_genes": "; ".join(mobile_element_genes) if mobile_element_genes else "none",
 	  "mobile_element_linked_resistance_genes": "; ".join(linked_genes) if linked_genes else "none",
 	 }
 	)

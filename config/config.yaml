@@ -36,10 +36,27 @@ card:
 # hits. NOT a re-BLAST against local CARD -- RGI already compared each hit
 # against CARD internally.
 blast:
-    database: "nr" # NCBI database to search remotely
+    # Tier 1: the local AMR catalog (NCBI AMRFinderPlus AMRProt, ~10k proteins, ~5 MB),
+    # downloaded and formatted by workflow/scripts/build_amr_blastdb.py. Searched first,
+    # and it answers almost everything in about a minute.
+    local_db_dir: "resources/blastdb/amr"
+    local_db_name: "AMRProt"
+    amr_catalog_url: "https://ftp.ncbi.nlm.nih.gov/pathogen/Antimicrobial_resistance/AMRFinderPlus/database/latest"
+
+    # Tier 2: NCBI, for the enzymes the catalog could not name -- the genuinely novel
+    # ones. Remote BLAST is queue-bound, not size-bound (a 216-protein and a 15-protein
+    # nr search both took 30 minutes to time out and return nothing), so it is worth
+    # waiting on only for the few queries the local database could not resolve.
+    database: "nr" # NCBI database for the remote fallback
+    remote_fallback: true # false = local only; unmatched enzymes are reported as unresolved
+    remote_timeout_seconds: 1800
+
     evalue_threshold: 1e-5
     max_target_seqs: 50
-    max_query_proteins: 0 # safety cap on enzymes submitted per sample (0 = no cap; all go in one remote job)
+    max_query_proteins: 15 # cap on enzymes searched per sample, most-novel-first (lowest CARD identity).
+    # The cap now bounds the remote fallback, not the local search: the local catalog
+    # handles the full enzyme set (221 proteins) in ~60s, so raise or zero this out if
+    # you want every enzyme covered -- the cost is only in what falls through to NCBI.
     mechanism_filter: "antibiotic inactivation" # which RGI hits to BLAST (the tutorial's focus)
 
 # MLST Configuration

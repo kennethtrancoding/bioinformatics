@@ -4,7 +4,6 @@ Wrapper for BV-BRC REST API endpoints
 Handles authentication, upload, job submission, polling, and download
 """
 
-import base64
 import json
 import time
 from pathlib import Path
@@ -76,13 +75,10 @@ class BVBRCClient:
 		except Exception:
 			pass
 
-		# Try to load existing token
 		if self.token_file.exists():
 			self._load_token()
 
-	# ========================================================================
 	# Authentication
-	# ========================================================================
 
 	def _load_token(self) -> bool:
 		"""
@@ -255,9 +251,7 @@ class BVBRCClient:
 			raise RuntimeError(f"RPC error from {method}: {response_data['error']}")
 		return response_data.get("result")
 
-	# ========================================================================
 	# Workspace Management
-	# ========================================================================
 
 	def get_or_create_workspace(self, workspace_name: str) -> Optional[str]:
 		"""
@@ -284,9 +278,7 @@ class BVBRCClient:
 		logger.info(f"Using workspace: {workspace_path}")
 		return workspace_path
 
-	# ========================================================================
 	# File Upload
-	# ========================================================================
 
 	@retry(max_attempts=3, delay=5.0, backoff=2.0, exceptions=(requests.RequestException,))
 	def upload_file(self, local_path: str, remote_path: str, file_type: str = "reads") -> bool:
@@ -387,11 +379,9 @@ class BVBRCClient:
 		try:
 			_require_safe_identifier(sample_id, "sample_id")
 
-			# Construct remote paths
 			r1_remote = f"{self.workspace}/reads/{sample_id}_R1.fastq.gz"
 			r2_remote = f"{self.workspace}/reads/{sample_id}_R2.fastq.gz"
 
-			# Upload both files
 			success_r1 = self.upload_file(r1_path, r1_remote, "reads")
 			success_r2 = self.upload_file(r2_path, r2_remote, "reads")
 
@@ -425,9 +415,7 @@ class BVBRCClient:
 			logger.debug(f"Could not create directory {remote_path}: {exception}")
 			return False
 
-	# ========================================================================
 	# Job Submission
-	# ========================================================================
 
 	@retry(max_attempts=2, delay=3.0, backoff=2.0, exceptions=(requests.RequestException,))
 	def submit_taxonomic_classification(
@@ -589,9 +577,7 @@ class BVBRCClient:
 			logger.error(f"Failed to submit Comprehensive Genome Analysis: {exception}")
 			return None
 
-	# ========================================================================
 	# Job Status & Results
-	# ========================================================================
 
 	@retry(max_attempts=3, delay=2.0, backoff=2.0, exceptions=(requests.RequestException,))
 	def get_job_status(self, job_id: str) -> Optional[Dict[str, Any]]:
@@ -641,7 +627,6 @@ class BVBRCClient:
 				logger.warning(f"Job {job_id} did not complete after {max_wait_seconds}s")
 				return False, last_status
 
-			# Query job status
 			job_info = self.get_job_status(job_id)
 
 			if job_info:
@@ -660,7 +645,6 @@ class BVBRCClient:
 				else:
 					logger.info(f"Job {job_id} status: {status} [{elapsed:.0f}s elapsed]")
 
-			# Wait before next poll
 			time.sleep(poll_interval)
 
 	def get_taxonomy_id(self, genus: str) -> Optional[int]:
@@ -695,9 +679,7 @@ class BVBRCClient:
 			logger.warning(f"Taxonomy lookup failed for {genus}: {exception}")
 		return 2  # fallback: Bacteria
 
-	# ========================================================================
 	# Download Results
-	# ========================================================================
 
 	@retry(max_attempts=3, delay=2.0, backoff=2.0, exceptions=(requests.RequestException,))
 	def download_file(self, remote_path: str, local_path: str) -> bool:
@@ -761,7 +743,7 @@ class BVBRCClient:
 				# Inline content.
 				with local_path.open("wb") as file_handle:
 					if isinstance(content, str):
-						file_handle.write(base64.b64decode(content))
+						file_handle.write(content.encode("utf-8"))
 					else:
 						file_handle.write(content)
 
@@ -790,7 +772,6 @@ class BVBRCClient:
 		try:
 			_require_safe_identifier(sample_id, "sample_id")
 
-			# Expected FASTA file path in BV-BRC output
 			remote_fasta = f"{job_output_path}/assembly_contigs.fasta"
 			local_fasta = Path(local_dir) / f"{sample_id}_assembly_contigs.fasta"
 
@@ -817,7 +798,6 @@ class BVBRCClient:
 		try:
 			_require_safe_identifier(sample_id, "sample_id")
 
-			# Expected genome report path
 			remote_report = f"{job_output_path}/genome_report.json"
 			local_report = Path(local_dir) / f"{sample_id}_genome_report.json"
 
@@ -829,9 +809,7 @@ class BVBRCClient:
 			logger.error(f"Error downloading genome report: {exception}")
 			return False
 
-	# ========================================================================
 	# Utility Methods
-	# ========================================================================
 
 	def check_file_exists(self, remote_path: str) -> bool:
 		"""Check if a file exists in the BV-BRC workspace."""
@@ -914,7 +892,6 @@ class BVBRCClient:
 
 
 if __name__ == "__main__":
-	# Example usage
 	client = BVBRCClient()
 
 	if not client.is_authenticated():

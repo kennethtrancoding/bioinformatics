@@ -17,6 +17,7 @@ import zipfile
 from pathlib import Path
 
 import boto3
+from boto3.s3.transfer import TransferConfig
 from botocore.exceptions import ClientError
 
 _BUCKET = os.environ.get("RESULTS_S3_BUCKET")
@@ -26,6 +27,20 @@ _PREFIX = os.environ.get("RESULTS_S3_PREFIX", "results").strip("/")
 _RAW_PREFIX = os.environ.get("RAW_S3_PREFIX", "raw").strip("/")
 _PRESIGN_EXPIRES_IN = int(os.environ.get("RESULTS_S3_PRESIGN_SECONDS", "300"))
 _client = boto3.client("s3") if _BUCKET else None
+
+# Raw reads are input data, not a backup: the upload releases the local copy, so
+# between an upload and its run S3 holds the only copy there is. The bucket's
+# lifecycle rule (deploy/s3-lifecycle.json) expires them after 7 days, which would be
+# a catastrophe for a job that simply sat in the queue for a week -- so the rule does
+# not match on age alone. It matches on this tag.
+#
+# Objects are uploaded UNRUN, and the rule only expires objects tagged UNRUN. When a
+# job is admitted -- started, or merely queued -- its reads are retagged IN_USE, the
+# rule stops matching them, and no amount of waiting can delete them out from under
+# the run. Snakemake removes them itself once the last rule that reads them is done.
+_RAW_STATE_TAG = "raw-state"
+RAW_UNRUN = "unrun"
+RAW_IN_USE = "in-use"
 
 
 def is_enabled() -> bool:
@@ -95,7 +110,117 @@ def upload_raw_file(job_id: str, file_path: Path) -> None:
 	if not is_enabled():
 		return
 	file_path = Path(file_path)
-	_client.upload_file(str(file_path), _BUCKET, raw_key_for(job_id, file_path.name))
+	_client.upload_file(
+		str(file_path),
+		_BUCKET,
+		raw_key_for(job_id, file_path.name),
+		ExtraArgs={"Tagging": f"{_RAW_STATE_TAG}={RAW_UNRUN}"},
+	)
+
+
+def upload_raw_fileobj(job_id: str, file_name: str, fileobj) -> None:
+	"""Stream a raw FASTQ to S3 straight from the request body, as it arrives.
+
+	upload_raw_file's counterpart for the path where the bytes are still in flight:
+	it reads the object rather than a file on disk, so an upload reaches S3 during
+	the upload instead of being read back off disk once it has landed.
+
+	The stream is not seekable, so concurrency is capped: boto3 holds
+	multipart_chunksize x max_concurrency bytes in memory while it works, and the
+	default (8 MB x 10) is a lot to hold per concurrent upload on a small box."""
+	if not is_enabled():
+		return
+	_client.upload_fileobj(
+		fileobj,
+		_BUCKET,
+		raw_key_for(job_id, file_name),
+		ExtraArgs={"Tagging": f"{_RAW_STATE_TAG}={RAW_UNRUN}"},
+		Config=TransferConfig(multipart_chunksize=8 * 1024 * 1024, max_concurrency=4),
+	)
+
+
+def download_raw_file(job_id: str, file_name: str, destination_path: Path) -> None:
+	"""Pull one raw FASTQ back down for a run.
+
+	Raw reads are no longer kept on local disk between the upload and the run: S3
+	holds them, and Snakemake fetches each one just before the rules that read it
+	(see workflow/rules/raw.smk), which is what keeps peak disk proportional to the
+	samples in flight rather than to the size of the batch.
+
+	Raises if the object is missing -- unlike the backup helpers, this is not best
+	effort. A run cannot proceed on reads it does not have, and a rule that fails
+	loudly here is far better than one that quietly analyses nothing."""
+	if not is_enabled():
+		raise RuntimeError(
+			"No S3 bucket is configured (RESULTS_S3_BUCKET), so raw reads cannot be "
+			f"fetched: {destination_path} is missing and there is nowhere to get it from."
+		)
+	destination_path = Path(destination_path)
+	destination_path.parent.mkdir(parents=True, exist_ok=True)
+	# Download to a sibling temp file and rename, so a half-downloaded FASTQ can never
+	# be mistaken for the real thing by a rule that only checks the path exists.
+	staging_path = destination_path.with_name(destination_path.name + ".partial")
+	try:
+		_client.download_file(_BUCKET, raw_key_for(job_id, file_name), str(staging_path))
+		staging_path.replace(destination_path)
+	finally:
+		staging_path.unlink(missing_ok=True)
+
+
+def delete_raw_file(job_id: str, file_name: str) -> None:
+	"""Remove a single raw object. Needed because an upload now reaches S3 before it
+	has been checksum-verified: a file that fails verification is deleted locally, and
+	its S3 copy has to go with it rather than linger as an orphan."""
+	if not is_enabled():
+		return
+	_client.delete_object(Bucket=_BUCKET, Key=raw_key_for(job_id, file_name))
+
+
+def _raw_keys(job_id: str):
+	paginator = _client.get_paginator("list_objects_v2")
+	for page in paginator.paginate(Bucket=_BUCKET, Prefix=raw_key_for(job_id, "")):
+		for stored_object in page.get("Contents", []):
+			yield stored_object["Key"]
+
+
+def _set_raw_state(job_id: str, state: str) -> int:
+	"""Retag every raw object of a job, and report how many were changed."""
+	if not is_enabled():
+		return 0
+	tagged_count = 0
+	for object_key in _raw_keys(job_id):
+		_client.put_object_tagging(
+			Bucket=_BUCKET,
+			Key=object_key,
+			Tagging={"TagSet": [{"Key": _RAW_STATE_TAG, "Value": state}]},
+		)
+		tagged_count += 1
+	return tagged_count
+
+
+def mark_raw_in_use(job_id: str) -> int:
+	"""Exempt a job's reads from the 7-day expiry, because the job now needs them.
+
+	Called when a run is admitted -- started OR queued, since a job waiting behind a
+	full slot needs its reads just as much as one that is running, and a busy queue is
+	exactly when a week could quietly go by. Once tagged, the lifecycle rule no longer
+	matches the objects at all, so the reads survive any length of queue and any length
+	of run; Snakemake deletes them when the rules that read them are finished.
+
+	Raises on failure. This is not best effort: if the tag does not stick, the reads
+	remain on a 7-day fuse while the job depends on them, and the caller needs to know."""
+	return _set_raw_state(job_id, RAW_IN_USE)
+
+
+def mark_raw_unrun(job_id: str) -> int:
+	"""Put a job's reads back on the clock after a run ends without success.
+
+	A failed or aborted run leaves reads that nothing is using. Without this they would
+	stay tagged in-use and never expire, so every abandoned job would keep its FASTQ in
+	the bucket forever -- the accumulation the 7-day rule exists to prevent. Expiry is
+	by object age, so reads already older than 7 days when their run fails will be
+	collected on the next pass rather than getting a fresh week."""
+	return _set_raw_state(job_id, RAW_UNRUN)
 
 
 def delete_raw(job_id: str) -> None:
