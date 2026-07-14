@@ -47,7 +47,7 @@ from workflow.lib.jobs import (
 from workflow.lib.pipeline_manager import PipelineManager
 from workflow.lib.preprocess import verify_file_md5
 from workflow.lib.retention import RetentionService
-from workflow.lib.utils import zip_directory
+from workflow.lib.utils import stream_directory_zip
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
@@ -1129,50 +1129,59 @@ def view_result(job_id, isolate_id):
 	return response
 
 
+def _zip_stream_response(directory, arc_root, download_name):
+	"""Serve a directory as a zip built on the fly, so the worker never holds more
+	than a chunk of it. download_name is always derived from an ID we have already
+	validated, so it is safe to put in the header verbatim."""
+	response = Response(
+		stream_directory_zip(directory, arc_root), mimetype="application/zip"
+	)
+	response.headers["Content-Disposition"] = f'attachment; filename="{download_name}"'
+	return response
+
+
+# S3 first, local disk second -- the reverse of what you might expect, and the
+# reason the box used to fall over on "download all".
+#
+# upload_job_results already puts these exact archives in S3 when a run finishes, so
+# for any completed job the artifact the user wants exists, pre-built, and a presigned
+# redirect hands it over without the bytes touching this process at all. Zipping the
+# local copy instead means rebuilding, in the web worker, something S3 is already
+# holding. We only do that when S3 cannot serve it: a run still in progress, or S3
+# switched off entirely. presigned_download_url returns None in both cases (it checks
+# the object exists), which is what makes the fallback safe to hang off it.
 @app.route("/results/<job_id>/<isolate_id>/download")
 def download_result(job_id, isolate_id):
 	_job_or_400(job_id)
 	if not is_valid_isolate_id(isolate_id):
 		abort(404)
-	resolved_path = _resolve_result_dir(job_id, isolate_id)
-	if resolved_path is not None:
-		zip_buffer = zip_directory(resolved_path, isolate_id)
-		return send_file(
-			zip_buffer,
-			mimetype="application/zip",
-			as_attachment=True,
-			download_name=f"{isolate_id}_results.zip",
-		)
 	download_url = s3_storage.presigned_download_url(
 		s3_storage.key_for(job_id, f"{isolate_id}_results.zip"),
 		filename=f"{isolate_id}_results.zip",
 		content_type="application/zip",
 	)
-	if download_url is None:
+	if download_url is not None:
+		return redirect(download_url)
+	resolved_path = _resolve_result_dir(job_id, isolate_id)
+	if resolved_path is None:
 		abort(404)
-	return redirect(download_url)
+	return _zip_stream_response(resolved_path, isolate_id, f"{isolate_id}_results.zip")
 
 
 @app.route("/results/<job_id>/download-all")
 def download_all_results(job_id):
 	_job_or_400(job_id)
-	results_dir = job_results_dir(job_id)
-	if results_dir.is_dir() and any(results_dir.iterdir()):
-		zip_buffer = zip_directory(results_dir, job_id)
-		return send_file(
-			zip_buffer,
-			mimetype="application/zip",
-			as_attachment=True,
-			download_name=f"{job_id}_results.zip",
-		)
 	download_url = s3_storage.presigned_download_url(
 		s3_storage.key_for(job_id, f"{job_id}_results.zip"),
 		filename=f"{job_id}_results.zip",
 		content_type="application/zip",
 	)
-	if download_url is None:
+	if download_url is not None:
+		return redirect(download_url)
+	results_dir = job_results_dir(job_id)
+	if not (results_dir.is_dir() and any(results_dir.iterdir())):
 		abort(404)
-	return redirect(download_url)
+	return _zip_stream_response(results_dir, job_id, f"{job_id}_results.zip")
 
 
 @app.route("/results/<job_id>/master-report/download")
