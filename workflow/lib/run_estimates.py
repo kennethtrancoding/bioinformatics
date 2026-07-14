@@ -9,22 +9,38 @@ THE SHAPE
 A run has two stages, and they do not scale the same way, so one number per sample
 cannot describe both.
 
-  The remote stage -- upload, genus, and the 40-60 minute BV-BRC assembly -- is
-  spent waiting on someone else's cluster. It costs this box nothing, so a run
-  waits on as many samples at once as ``bvbrc_in_flight`` allows. Twelve samples
-  and twelve slots is *one* round of waiting, not twelve. Its cost is therefore
-  REMOTE_SECONDS x ceil(N / bvbrc_in_flight), and for any batch that fits in the
-  pool that is a constant.
+  The remote stage -- genus, and the 40-60 minute BV-BRC assembly -- is spent
+  waiting on someone else's cluster. It costs this box nothing, so a run waits on
+  as many samples at once as ``bvbrc_in_flight`` allows. Twelve samples and twelve
+  slots is *one* round of waiting, not twelve. Its cost is REMOTE_SECONDS x
+  ceil(N / bvbrc_in_flight), and for any batch that fits in the pool it is a
+  constant.
 
   The local stage -- RGI, MobileElementFinder, BLAST, MLST, the reports -- is real
-  work on this box's cores. RGI and MEF each take the whole CPU pool, so they
-  serialise: two samples cost twice what one does. Its cost is linear in N, and
-  past a batch of a dozen or so it is the stage that dominates the run -- at a
-  hundred samples it is most of the runtime, and no number of BV-BRC slots touches
-  it. Cores are the only thing that do, which is why it is measured in core-seconds
-  and divided by them: it is the one term in this model a bigger box improves.
+  work on this box's cores, measured in core-seconds and divided by them, because
+  cores are the one term here a bigger box improves.
 
-  estimate = REMOTE x ceil(N / bvbrc_in_flight) + LOCAL_CORE_SECONDS x N / cores
+AND THEY OVERLAP
+
+The two stages are charged to different pools (cpu and bvbrc, see
+lib/pipeline_manager.py), so they do not queue behind each other: while round k+1
+is assembling at BV-BRC, round k's samples are already going through RGI here. The
+model used to *add* the stages, which quoted every run as if the box sat idle
+through every assembly and BV-BRC sat idle through every RGI. On a 48-sample batch
+that was the difference between a quoted 30 hours and a real 5.
+
+So what a run actually costs is whichever of these binds:
+
+  remote-bound   REMOTE x rounds + (the last round's local work, which has no
+                 assembly left to hide behind)
+  local-bound    REMOTE (the first round; nothing local can start before it lands)
+                 + all the local work, because the cores never catch up
+
+  estimate = max(of those two)
+
+A small batch on a decent box is remote-bound and the local stage is nearly free.
+Enough samples on few enough cores and the box becomes the bottleneck instead. The
+max() picks whichever is true rather than assuming one of them.
 
 THE SCALE
 
@@ -62,21 +78,39 @@ import time
 from workflow.lib import jobs
 
 
-# What one sample costs at BV-BRC: the upload, the Similar Genome Finder, and the
-# 40-60 minute Comprehensive Genome Analysis, plus BV-BRC's own queue. Paid once
-# per round of in-flight samples, not once per sample. Does not depend on this
-# box at all -- the work is not happening here.
-REMOTE_SECONDS = max(0, int(os.environ.get("RUN_REMOTE_SECONDS", "5400")))
+# What one sample costs at BV-BRC: the Similar Genome Finder, then the
+# Comprehensive Genome Analysis, plus BV-BRC's own queue. Paid once per round of
+# in-flight samples, not once per sample. Does not depend on this box at all --
+# the work is not happening here.
+#
+# 4000s, from a measured 48-sample run: genus 852s median, and a cold assembly
+# 40-66 minutes. (The README's 90-minute figure was for both stages plus slack.)
+REMOTE_SECONDS = max(0, int(os.environ.get("RUN_REMOTE_SECONDS", "4000")))
 
 # What one sample costs on this box afterwards -- RGI, MobileElementFinder, BLAST,
 # MLST, the reports -- measured in CORE-seconds, not seconds, so that it can be
-# divided by the cores available. RGI and MEF each take the whole CPU pool, so this
-# work serialises across samples: the local stage is CORE_SECONDS x N / cores, and
-# cores is the only term in the whole model that a bigger box improves. The default
-# is 3600 core-seconds, which on the default four cores is 15 minutes a sample.
+# divided by the cores available.
+#
+# 600 core-seconds, and that number is measured, not guessed: on the 48-sample run
+# RGI was 112s at 4 threads (448 core-s), MobileElementFinder 19s at 4 (76), MLST
+# 30s at 1, BLAST 2s at 4 (8) -- the local AMR catalog answers nearly everything
+# and the NCBI tier almost never fires -- and every other rule under a second.
+#
+# The old default was 3600, six times this, and it was the whole reason a 48-sample
+# batch was quoted at 30 hours when it really took about five. If you change the
+# pipeline's local work, re-measure this from a real run rather than estimating it.
 LOCAL_CORE_SECONDS_PER_SAMPLE = max(
-	0, int(os.environ.get("RUN_LOCAL_CORE_SECONDS_PER_SAMPLE", "3600"))
+	0, int(os.environ.get("RUN_LOCAL_CORE_SECONDS_PER_SAMPLE", "600"))
 )
+
+# Bumped whenever the shape of the model or its constants change. A stored factor
+# is the ratio of a real run to what *some* model predicted, so it is only meaning-
+# ful against the model that produced it: carrying the old ones across a
+# recalibration would correct the new model by how wrong the old one was, and a
+# 6x change in a constant would land as a 6x error in the other direction.
+# Entries from another version are ignored rather than deleted -- they are still a
+# record of what the box did.
+MODEL_VERSION = 2
 
 # Enough history to be robust to a couple of freak runs, short enough that the
 # estimate still moves when the pipeline or the hardware genuinely changes.
@@ -126,11 +160,28 @@ def assembly_rounds(sample_count, bvbrc_in_flight):
 
 def baseline_seconds(sample_count, bvbrc_in_flight, cores):
 	"""What the model says a run of ``sample_count`` samples costs, before this
-	instance's own history is allowed to correct it."""
-	return (
-		REMOTE_SECONDS * assembly_rounds(sample_count, bvbrc_in_flight)
-		+ LOCAL_CORE_SECONDS_PER_SAMPLE * max(0, sample_count) / max(1, cores)
-	)
+	instance's own history is allowed to correct it.
+
+	The stages overlap (see THE SHAPE above), so this is the larger of the two ways
+	a run can be bound, not the sum of them."""
+	sample_count = max(0, sample_count)
+	if not sample_count:
+		# Nothing to do: a re-run whose every output is already on disk is a
+		# Snakemake no-op, not a round of waiting.
+		return 0.0
+
+	in_flight = max(1, bvbrc_in_flight)
+	cores = max(1, cores)
+	rounds = assembly_rounds(sample_count, in_flight)
+
+	# The last round is whatever did not fill a whole one -- and it is the only local
+	# work with no assembly still running to hide behind.
+	samples_in_last_round = sample_count - (rounds - 1) * in_flight
+	local_per_sample = LOCAL_CORE_SECONDS_PER_SAMPLE / cores
+
+	remote_bound = REMOTE_SECONDS * rounds + local_per_sample * samples_in_last_round
+	local_bound = REMOTE_SECONDS + local_per_sample * sample_count
+	return max(remote_bound, local_bound)
 
 
 def sample_is_complete(results_dir, isolate_id):
@@ -166,6 +217,8 @@ def _read_history():
 		if isinstance(entry, dict)
 		and isinstance(entry.get("factor"), (int, float))
 		and entry["factor"] > 0
+		# A factor only means anything against the model that produced it.
+		and entry.get("model") == MODEL_VERSION
 	]
 	_cached_history_key = history_key
 	return _cached_history
@@ -201,6 +254,7 @@ def record(sample_count, bvbrc_in_flight, cores, seconds):
 		return
 	entry = {
 		"finished_at": time.time(),
+		"model": MODEL_VERSION,
 		"samples": sample_count,
 		"bvbrc_in_flight": bvbrc_in_flight,
 		"cores": cores,
