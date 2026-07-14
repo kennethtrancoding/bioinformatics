@@ -31,7 +31,7 @@ from unittest import mock
 from tests._isolation import TMP_ROOT, REAL_ROOT  # noqa: F401  (must import first)
 
 import frontend  # noqa: E402
-from workflow.lib import cloud_import, jobs  # noqa: E402
+from workflow.lib import cloud_import, jobs, run_estimates  # noqa: E402
 
 from tests.test_batching import Base, token_for, _REAL_POPEN  # noqa: E402
 from tests.test_cloud_import import FakeDrive, SHARED_FOLDER, fastq_bytes, md5, stats_workbook  # noqa: E402
@@ -152,6 +152,26 @@ class NormalUserFlow(Base):
 	def start(self, job_id):
 		return self.client.post("/run", data={"job_id": job_id})
 
+	def seed_run_history(self, seconds_per_run):
+		"""Pin what a one-sample run "costs", so the estimates a test reads are its
+		own and not whatever the runs in every other test happened to take. None
+		leaves this instance with no history at all, as a freshly deployed one has."""
+		jobs.run_history_path().unlink(missing_ok=True)
+		self.addCleanup(jobs.run_history_path().unlink, missing_ok=True)
+		if seconds_per_run is not None:
+			run_estimates.record(
+				1, frontend.BVBRC_MAX_IN_FLIGHT, frontend.PIPELINE_CORES, seconds_per_run
+			)
+
+	def complete_sample_on_disk(self, job_id, isolate_id):
+		"""Leave behind the outputs a finished sample leaves, which are exactly the
+		outputs Snakemake looks for before deciding it can skip one."""
+		results_dir = jobs.job_results_dir(job_id)
+		for relative_path in run_estimates.SAMPLE_FINAL_OUTPUTS:
+			output_path = results_dir / relative_path.format(sample=isolate_id)
+			output_path.parent.mkdir(parents=True, exist_ok=True)
+			output_path.write_text("")
+
 	def health(self):
 		return self.client.get("/api/health").get_json()["pipelines"]
 
@@ -244,6 +264,180 @@ class NormalUserFlow(Base):
 		self.assertTrue(status["done"])
 		self.assertFalse(status["success"])
 		self.assertIn("aborted", status["error"].lower())
+
+	def test_a_waiting_run_is_told_when_it_starts_and_a_going_one_how_long_it_has(self):
+		"""A run behind two others is a run someone is waiting on. Both numbers the
+		page shows come from the server: when the queue lets this job start, and how
+		long the job itself should take once it does."""
+		self.seed_run_history(seconds_per_run=600)
+
+		running_first = self.runnable(self.submit_pair("ETA_A").get_json()["job_id"])
+		running_second = self.runnable(self.submit_pair("ETA_B").get_json()["job_id"])
+		queued_first = self.runnable(self.submit_pair("ETA_C").get_json()["job_id"])
+		queued_second = self.runnable(self.submit_pair("ETA_D").get_json()["job_id"])
+		for job_id in (running_first, running_second, queued_first, queued_second):
+			self.start(job_id)
+
+		# A run that is going reports its estimated total; the page subtracts the
+		# elapsed time it already has to count down what is left.
+		going = self.client.get(f"/status?job_id={running_first}").get_json()
+		self.assertFalse(going["queued"])
+		self.assertAlmostEqual(going["estimated_seconds"], 600)
+		self.assertIsNotNone(going["started_at"])
+
+		# A run that is waiting reports the wait, which cannot exceed the runs it is
+		# waiting on, and is longer the further back in the queue it sits.
+		waiting = self.client.get(f"/status?job_id={queued_first}").get_json()
+		behind_it = self.client.get(f"/status?job_id={queued_second}").get_json()
+		self.assertTrue(waiting["queued"])
+		self.assertAlmostEqual(waiting["estimated_seconds"], 600)
+		self.assertGreater(waiting["queue_wait_seconds"], 0)
+		self.assertLessEqual(waiting["queue_wait_seconds"], 600)
+		self.assertGreaterEqual(behind_it["queue_wait_seconds"], waiting["queue_wait_seconds"])
+
+		# Nothing starts during a database refresh, so there is no honest number to
+		# give -- and the app says nothing rather than promising a start time.
+		jobs.drain_flag_path().write_text("")
+		self.assertIsNone(
+			self.client.get(f"/status?job_id={queued_first}").get_json()["queue_wait_seconds"]
+		)
+
+	def test_the_estimate_is_learned_only_from_runs_that_really_ran(self):
+		"""The first run on a new instance is estimated from the README's figures;
+		after that, from what this instance's own hardware and BV-BRC queue actually
+		did. Three kinds of run teach it nothing, and each would teach it a lie: one
+		that was aborted, one that crashed, and one that "succeeded" in two seconds
+		because Snakemake found every output already on disk."""
+		self.seed_run_history(seconds_per_run=None)  # a fresh instance, no history
+		# Nothing has contradicted the model yet, so it is trusted as written.
+		self.assertEqual(run_estimates.calibration(), 1.0)
+
+		# The runs in this test finish in milliseconds, which is exactly the case the
+		# floor throws away -- so the run that is meant to teach it something is
+		# recorded by hand, at a length a real one has.
+		aborted = self.runnable(self.submit_pair("LEARN_ABORTED").get_json()["job_id"])
+		self.start(aborted)
+		self.client.post("/abort", data={"job_id": aborted})
+		instant = self.runnable(self.submit_pair("LEARN_INSTANT").get_json()["job_id"])
+		self.start(instant)
+		self.release(instant)
+		for job_id in (aborted, instant):
+			_wait_until(
+				lambda job_id=job_id: job_id not in frontend._pipeline_processes,
+				what=f"{job_id} to be reaped",
+			)
+		self.assertTrue(self.client.get(f"/status?job_id={instant}").get_json()["success"])
+		self.assertEqual(run_estimates.calibration(), 1.0)
+
+		# A run of real length is what moves the estimate: this instance took 3000s
+		# over a one-sample run the model priced at 6300s, so it is running at a bit
+		# under half the model's pace, and every later job is quoted at that pace.
+		self.seed_run_history(seconds_per_run=3000)
+		one_sample_baseline = run_estimates.baseline_seconds(
+			1, frontend.BVBRC_MAX_IN_FLIGHT, frontend.PIPELINE_CORES
+		)
+		self.assertAlmostEqual(run_estimates.calibration(), 3000 / one_sample_baseline)
+		next_job = self.runnable(self.submit_pair("LEARN_NEXT").get_json()["job_id"])
+		self.start(next_job)
+		self.assertAlmostEqual(
+			self.client.get(f"/status?job_id={next_job}").get_json()["estimated_seconds"], 3000
+		)
+
+	def test_a_rerun_is_measured_by_the_work_it_has_left_not_by_its_manifest(self):
+		"""Re-running is how a user recovers from a failed run, and a re-run keeps
+		every sample that already finished: admission clears the run markers but not
+		the results, so Snakemake finds those outputs and skips them.
+
+		A re-run quoted the whole job's runtime is wrong by however much it skips.
+		A re-run that *records* its length against the whole manifest is worse: it
+		divides a short run by a full job's waves and teaches every later estimate
+		that a wave costs a fraction of what it does."""
+		in_flight = frontend.BVBRC_MAX_IN_FLIGHT
+		cores = frontend.PIPELINE_CORES
+		one_sample = run_estimates.baseline_seconds(1, in_flight, cores)
+		five_samples = run_estimates.baseline_seconds(5, in_flight, cores)
+		# An instance that runs at exactly the model's pace, so an estimate here is
+		# the model's own arithmetic and the test can name what it should say.
+		self.seed_run_history(seconds_per_run=one_sample)
+		self.assertEqual(run_estimates.calibration(), 1.0)
+
+		sample_names = [f"RERUN_S{index}" for index in range(5)]
+		job_id = self.submit_pair(sample_names[0]).get_json()["job_id"]
+		for sample_name in sample_names[1:]:
+			self.submit_pair(sample_name, job_id=job_id)
+		self.runnable(job_id)
+
+		manager = frontend._pipeline_manager
+		self.assertEqual(manager.pending_sample_count(job_id), 5)
+		self.assertAlmostEqual(manager.estimated_seconds(job_id), five_samples)
+
+		# The run dies with one sample to go. What is left is one sample's work, and
+		# the manifest still says five.
+		for sample_name in sample_names[:-1]:
+			self.complete_sample_on_disk(job_id, sample_name)
+		self.assertEqual(manager.pending_sample_count(job_id), 1)
+		self.assertAlmostEqual(manager.estimated_seconds(job_id), one_sample)
+
+		# The re-run is quoted that one sample, and stays quoted it: the estimate is
+		# the size of the run, and a run does not shrink as its samples land.
+		self.start(job_id)
+		self.assertEqual(manager.pending_at_start[job_id], 1)
+		self.assertAlmostEqual(
+			self.client.get(f"/status?job_id={job_id}").get_json()["estimated_seconds"],
+			one_sample,
+		)
+		self.complete_sample_on_disk(job_id, sample_names[-1])
+		self.assertAlmostEqual(manager.estimated_seconds(job_id), one_sample)
+
+		# And it is folded into the history as the one sample it did. Charged instead
+		# to the five-sample manifest, a run that took exactly as long as the model
+		# said a single sample should would have "proved" the instance runs
+		# five_samples/one_sample times faster than it does, and every later estimate
+		# would have been cut by that much.
+		run_estimates.record(
+			manager.pending_at_start[job_id], in_flight, cores, one_sample
+		)
+		self.assertEqual(run_estimates.calibration(), 1.0)
+
+		# A job with nothing left to do is a Snakemake no-op, not a run of work.
+		self.assertEqual(manager.pending_sample_count(job_id), 0)
+		self.assertEqual(run_estimates.estimate_seconds(0, in_flight, cores), 0)
+
+	def test_bvbrc_waits_are_bounded_by_their_own_pool_and_not_by_this_box_s_cores(self):
+		"""The 40-60 minutes a sample spends assembling is spent waiting on BV-BRC's
+		cluster, not working on this one. It used to sit in a Snakemake core slot
+		anyway, so a ten-sample batch could only wait on four samples at a time and
+		took three rounds of assembly to do what one round could.
+
+		So --cores is handed a job-slot budget, wide enough that the waiting is never
+		what it gates, and the three things that are genuinely scarce get pools of
+		their own: the box's cores, the samples BV-BRC will hold, and the samples
+		whose reads are on local disk."""
+		captured_argv = []
+
+		def recording_popen(argv, **kwargs):
+			captured_argv.append(argv)
+			return _held_popen(argv, **kwargs)
+
+		frontend.subprocess.Popen = recording_popen
+		job_id = self.runnable(self.submit_pair("POOLS").get_json()["job_id"])
+		self.assertEqual(self.start(job_id).status_code, 200)
+		argv = captured_argv[0]
+
+		# Each pool is passed, and each is the knob it says it is.
+		self.assertIn("--resources", argv)
+		self.assertIn(f"cpu={frontend.PIPELINE_CORES}", argv)
+		self.assertIn(f"bvbrc={frontend.BVBRC_MAX_IN_FLIGHT}", argv)
+		self.assertIn(f"uploads={frontend.BVBRC_UPLOAD_BATCH}", argv)
+		# A rule pays a core of the box unless it declares otherwise, so raising the
+		# slot count below cannot let the local work oversubscribe the machine.
+		self.assertEqual(argv[argv.index("--default-resources") + 1], "cpu=1")
+
+		# And the slot budget is not the core count: it is big enough to hold every
+		# BV-BRC wait at once, which is the entire point.
+		job_slots = int(argv[argv.index("--cores") + 1])
+		self.assertGreaterEqual(job_slots, frontend.BVBRC_MAX_IN_FLIGHT + frontend.PIPELINE_CORES)
+		self.assertGreater(job_slots, frontend.PIPELINE_CORES)
 
 	def test_a_database_refresh_lands_in_the_middle_of_a_busy_queue(self):
 		"""The scenario the whole drain design exists for.

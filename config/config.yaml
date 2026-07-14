@@ -41,6 +41,9 @@ blast:
     # and it answers almost everything in about a minute.
     local_db_dir: "resources/blastdb/amr"
     local_db_name: "AMRProt"
+    # Threads for the local blastp. An upper bound, not a demand: the rule clamps
+    # this to the cores the box actually has (see workflow/Snakefile).
+    threads: 4
     amr_catalog_url: "https://ftp.ncbi.nlm.nih.gov/pathogen/Antimicrobial_resistance/AMRFinderPlus/database/latest"
 
     # Tier 2: NCBI, for the enzymes the catalog could not name -- the genuinely novel

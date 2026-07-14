@@ -464,6 +464,91 @@ Approximate per-sample runtime:
 Remote BLAST is informational. The rule writes declared outputs even when NCBI
 is unavailable so the rest of the report can still complete.
 
+### What a batch costs, and what bounds it
+
+Most of that per-sample time is spent *waiting on BV-BRC*, not working here. A run
+therefore hands Snakemake three separate budgets instead of one core count, because
+three different things are scarce and they are not the same thing:
+
+| Pool | Env | Default | What it bounds |
+| --- | --- | --- | --- |
+| `cpu` | `PIPELINE_CORES` | 4 | The cores the box has. RGI and MobileElementFinder charge their full thread count; every other rule charges 1. |
+| `bvbrc` | `BVBRC_MAX_IN_FLIGHT` | 12 | Samples assembling at BV-BRC at once. Not a hardware limit -- the work is theirs -- so it is sized for the batch. |
+| `uploads` | `BVBRC_UPLOAD_BATCH` | 4 | Samples holding raw FASTQ on local disk while they feed it to BV-BRC. Small on purpose (see `workflow/rules/raw.smk`). |
+
+`--cores` is then not a CPU budget at all but a job-slot budget, sized so it is
+never the binding constraint. This is deliberate: a Snakemake job slot used to be
+required for each of those 40-minute waits, so only `PIPELINE_CORES` samples could
+*wait* at a time and a ten-sample batch took three sequential rounds of assembly to
+do what one round can. Now the batch is uploaded a few samples at a time (disk is
+the constraint there) and assembled all at once.
+
+The consequence is that the two stages of a run scale differently, and the second
+one is what grows with batch size:
+
+- **Remote** (upload, genus, assembly): `~90 min x ceil(N / BVBRC_MAX_IN_FLIGHT)`.
+  Flat for any batch that fits in the pool. Costs this box nothing.
+- **Local** (RGI, BLAST, MLST, MobileElementFinder, reports): `~3600 core-seconds x
+  N / PIPELINE_CORES` -- 15 min a sample on four cores. RGI and MEF each take the
+  whole CPU pool, so they serialise, and this term is linear in N however many BV-BRC
+  slots there are. **Cores are the only thing that shorten it.**
+
+Which means the two knobs matter at different scales, and it is worth being blunt
+about where this design stops working:
+
+| Batch | Assembly rounds (in-flight 12) | Remote | Local (4 cores) | Total |
+| --- | --- | --- | --- | --- |
+| 10 | 1 | 1.5 h | 2.5 h | **~4 h** |
+| 100 | 9 | 13.5 h | 25 h | **~38 h** |
+| 1000 | 84 | 126 h | 250 h | **~16 days** |
+
+At ten samples, raising `BVBRC_MAX_IN_FLIGHT` is what buys you the win (it is the
+whole reason this batch takes one round of assembly instead of three). At a hundred
+it buys much less, and at a thousand almost nothing: the local stage is 250 hours of
+RGI and MobileElementFinder on four cores, and no amount of BV-BRC parallelism
+touches it. Batches of that size need a bigger `PIPELINE_CORES` on a bigger
+instance -- or, past a few hundred samples, a different execution backend
+(Snakemake can submit the local rules to a cluster or to AWS Batch, which is the
+point at which one box stops being the right shape).
+
+Two things to know before raising `BVBRC_MAX_IN_FLIGHT`:
+
+- **BV-BRC's queue is not free.** The more jobs you have queued there at once, the
+  longer each one sits, and `bvbrc.max_wait_time` (`config/config.yaml`, 2 h) is the
+  point at which the poll gives up and the sample *fails*. Pushing a hundred
+  assemblies at a shared public service in one go is a good way to convert their
+  queue time into timeouts. Raise `max_wait_time` alongside it.
+- **Each in-flight sample is a live poll process here** (tens of MB). Twelve is
+  nothing; two hundred is gigabytes of idle Python.
+
+### The estimates the page shows
+
+The page turns the above into the two times a waiting user actually wants: how long
+a queued run has until it starts, and how much longer a running one has to go. Both
+come from one estimate in `workflow/lib/run_estimates.py`, which is the two-term
+model above (`RUN_REMOTE_SECONDS`, `RUN_LOCAL_CORE_SECONDS_PER_SAMPLE`) multiplied by
+a correction learned from this instance: every successful run divides what it actually
+took by what the model predicted, and the estimate uses the median of the last 25
+such ratios (`config/jobs/.run_history.json`, on the persistent volume -- an estimate
+built from history is worth nothing if a restart throws the history away). A fresh
+instance has no ratios and trusts the model as written, which is why its constants
+are anchored on the figures above: one sample is 90 + 15 min, the 1h45m quoted there.
+
+N is the samples a run *has to do*, not the samples in the manifest. Re-running is
+how a failed run is recovered, and a re-run keeps every sample that already finished
+-- admission clears the run markers but not the results, so Snakemake skips them.
+Counting them would quote the re-run a full job's runtime and then record its short
+actual duration as the cost of a full job, teaching every later estimate that the
+pipeline is several times faster than it is.
+
+A queued run's wait is a simulation of the drain that will start it: each running job
+holds its slot until its estimate says it finishes, and each job ahead in the queue
+takes the first slot to come free.
+
+They are estimates, and the page says so. A run whose BV-BRC assembly sits in a
+long queue will overrun its estimate, and is reported as running past it rather
+than as counting down to a time that has already passed.
+
 ## Development Notes
 
 Main files:

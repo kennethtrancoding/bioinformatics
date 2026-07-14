@@ -51,6 +51,11 @@ rule fetch_raw_read:
         # paths elsewhere in the tree.
         job = r"[A-Z2-9]{12}",
         filename = r"[^/]+\.fastq\.gz"
+    resources:
+        # An S3 download: no local compute. The group it belongs to is what is
+        # rationed (bvbrc_upload_reads takes `uploads=1`), because what is scarce
+        # is the reads this rule puts on disk, not the cycles it spends doing it.
+        cpu = 0
     log:
         f"{config['results_dir']}/logs/fetch_{{job}}_{{filename}}.log"
     group:

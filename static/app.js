@@ -11,7 +11,7 @@ function escapeHtml(value) {
 
 function loadHealth() {
 	var status = document.getElementById("health-status");
-	status.textContent = "Checking services…";
+	status.textContent = "Checking services...";
 	var healthUrl = "/api/health";
 	if (currentJobId) healthUrl += "?job_id=" + encodeURIComponent(currentJobId);
 	return fetch(healthUrl)
@@ -71,23 +71,6 @@ function formatBytes(bytes) {
 	return Math.round(bytes / 1024) + " KB";
 }
 
-// A 21 GB run folder is a two-hour upload on a home connection, so the estimate
-// is what separates "this is working" from "this is stuck". Extrapolated from the
-// rate achieved so far, which settles down within the first minute.
-function remainingText(bytesSent, bytesTotal, startedAt) {
-	var elapsedSeconds = (Date.now() - startedAt) / 1000;
-	if (elapsedSeconds < 5 || !bytesSent) return "";
-	var secondsLeft = ((bytesTotal - bytesSent) / bytesSent) * elapsedSeconds;
-	if (secondsLeft < 60) return " — under a minute left";
-	var hours = Math.floor(secondsLeft / 3600);
-	var minutes = Math.round((secondsLeft - hours * 3600) / 60);
-	if (minutes === 60) {
-		hours += 1;
-		minutes = 0;
-	}
-	return " — about " + (hours ? hours + "h " + minutes + "m" : minutes + "m") + " left";
-}
-
 function formatDuration(seconds) {
 	if (seconds === null || seconds === undefined || !isFinite(seconds) || seconds < 0) {
 		return "";
@@ -100,23 +83,45 @@ function formatDuration(seconds) {
 	return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(secs).padStart(2, "0")}`;
 }
 
-// A run's elapsed time has to keep moving between the 3s status polls,
-// so it is recomputed locally each second from the start time the
-// server gave us.
+// A run's elapsed time, and a queued run's wait, both have to keep moving
+// between the 3s status polls, so they are recomputed locally each second: the
+// elapsed time from the start time the server gave us, and the wait from how
+// long ago the server gave us its estimate.
 var currentRunStatus = null;
+var currentRunStatusAt = null;
 var runTicker = null;
 
-function runningRunText(runStatus) {
+function activeRunText(runStatus) {
+	if (runStatus.queued) {
+		var queuedText = `Queued (position ${runStatus.queue_position})`;
+		if (runStatus.queue_wait_seconds === null || runStatus.queue_wait_seconds === undefined) {
+			return `${queuedText}; waiting for a free pipeline slot...`;
+		}
+		var secondsSinceStatus = currentRunStatusAt
+			? Date.now() / 1000 - currentRunStatusAt
+			: 0;
+		var secondsToStart = Math.max(0, runStatus.queue_wait_seconds - secondsSinceStatus);
+		return `${queuedText} starts in ${formatDuration(secondsToStart)}, then runs for ${formatDuration(runStatus.estimated_seconds)} (estimates)`;
+	}
+
 	var elapsed = runStatus.started_at ? Date.now() / 1000 - runStatus.started_at : null;
 	var elapsedText = formatDuration(elapsed);
-	return "Pipeline running…" + (elapsedText ? " " + elapsedText + " elapsed" : "");
+	var text = "Pipeline running..." + (elapsedText ? " " + elapsedText + " elapsed" : "");
+	if (!runStatus.estimated_seconds || elapsed === null) return text;
+	var secondsLeft = runStatus.estimated_seconds - elapsed;
+	return (
+		text +
+		(secondsLeft > 0
+			? `; ${formatDuration(secondsLeft)} left (estimate)`
+			: "; past the estimate, still running")
+	);
 }
 
 function startRunTicker() {
 	if (runTicker) return;
 	runTicker = setInterval(function () {
-		if (!currentRunStatus || currentRunStatus.done || currentRunStatus.queued) return;
-		document.getElementById("run-status").textContent = runningRunText(currentRunStatus);
+		if (!currentRunStatus || currentRunStatus.done) return;
+		document.getElementById("run-status").textContent = activeRunText(currentRunStatus);
 	}, 1000);
 }
 
@@ -128,14 +133,18 @@ function stopRunTicker() {
 }
 
 // Renders a run_status object ({done, success, error, started_at,
-// finished_at}) into a status element, making a crash impossible to
-// mistake for "still running" or for success -- flagged in red, with
-// whatever detail the server could pull from the pipeline log. A run
-// that is going shows how long it has been going; one that finished
-// shows how long it took.
+// finished_at, queue_wait_seconds, estimated_seconds}) into a status
+// element, making a crash impossible to mistake for "still running" or
+// for success -- flagged in red, with whatever detail the server could
+// pull from the pipeline log. A run that is going shows how long it has
+// been going and roughly how much is left; one still queued shows how
+// long until it starts; one that finished shows how long it took.
 function showRunStatus(el, runStatus) {
 	let runPipelineButton = document.getElementById("run");
 	currentRunStatus = runStatus;
+	// The server's estimates are seconds from the moment it answered, so the
+	// countdown needs to know when that was.
+	currentRunStatusAt = Date.now() / 1000;
 	el.classList.remove("error-text");
 	runPipelineButton.hidden = false;
 
@@ -143,11 +152,7 @@ function showRunStatus(el, runStatus) {
 		// A queued run is admitted but waiting for a free slot -- say
 		// so, rather than claiming it is running when it has not started.
 		// It has no start time yet, so it has no elapsed time either.
-		el.textContent = runStatus.queued
-			? "Queued (position " +
-				runStatus.queue_position +
-				"); waiting for a free pipeline slot…"
-			: runningRunText(runStatus);
+		el.textContent = activeRunText(runStatus);
 		el.classList.remove("error-text");
 
 		runPipelineButton.hidden = true;
@@ -358,7 +363,7 @@ document.getElementById("lookup-btn").addEventListener("click", function () {
 		status.textContent = "Enter a job ID first.";
 		return;
 	}
-	statusText.textContent = "Looking up…";
+	statusText.textContent = "Looking up...";
 
 	fetchJob(jobId)
 		.then(function (res) {
@@ -607,7 +612,8 @@ document.getElementById("import-btn").addEventListener("click", async function (
 	var grouped = importUnits(files);
 	var units = await unsentUnits(grouped.units);
 	if (grouped.units.length && !units.length) {
-		status.textContent = "Every sample in this folder is already in the batch — nothing to send.";
+		status.textContent =
+			"Every sample in this folder is already in the batch — nothing to send.";
 		return;
 	}
 	var batches = importBatches(units, grouped.nonFastqFiles);
@@ -643,43 +649,33 @@ document.getElementById("import-btn").addEventListener("click", async function (
 			return;
 		}
 
-		var batchLabel = "batch " + (batchIndex + 1) + " of " + batches.length;
+		var batchLabel = `batch ${batchIndex + 1} of ${batches.length}`;
 		var bytesSentBeforeBatch = bytesSent;
 		// Covers the gap before the first progress event: without it the line would
 		// still show the previous batch's numbers while this one spins up.
-		status.textContent = "Uploading " + batchLabel + " — starting…";
+		status.textContent = `Uploading ${batchLabel}, starting...`;
 
 		var result;
 		try {
 			result = await postImportBatch(formData, function (batchBytesSent, batchBytesTotal) {
 				bytesSent = bytesSentBeforeBatch + batchBytesSent;
 				if (batchBytesSent < batchBytesTotal) {
-					status.textContent =
-						"Uploading " +
-						batchLabel +
-						" — " +
-						formatBytes(bytesSent) +
-						" of " +
-						formatBytes(bytesToSend) +
-						" (" +
-						Math.floor((bytesSent / bytesToSend) * 100) +
-						"%)" +
-						remainingText(bytesSent, bytesToSend, startedAt);
+					var estimate = "";
+					var elapsedSeconds = (Date.now() - startedAt) / 1000;
+					if (elapsedSeconds >= 5 && bytesSent) {
+						var secondsLeft = ((bytesToSend - bytesSent) / bytesSent) * elapsedSeconds;
+						estimate = `; around ${formatDuration(secondsLeft)} left`;
+					}
+					status.textContent = `Uploading your files, ${batchLabel}. In total, ${formatBytes(bytesSent)} / ${formatBytes(bytesToSend)} (${Math.floor((bytesSent / bytesToSend) * 100)}%) was sent${estimate}`;
 				} else {
 					// The bytes are up but the request is not done: the server still has
 					// to verify each pair's MD5 and push it to S3, which for a 2 GB batch
 					// is not instant. Saying so beats a progress line frozen at 100%.
-					status.textContent =
-						"Uploaded " + batchLabel + " — verifying checksums and copying to S3…";
+					status.textContent = `Uploaded ${batchLabel}; verifying checksums and copying to S3`;
 				}
 			});
 		} catch (error) {
-			status.textContent =
-				"Import stopped on " +
-				batchLabel +
-				": " +
-				error.message +
-				" Everything before it is saved — import the same folder again to send the rest.";
+			status.textContent = `Import stopped or failed on ${batchLabel}. Everything before it is saved; import the same folder again to send the rest.`;
 			if (summary.job_id) afterUpload(summary.job_id);
 			return;
 		}
@@ -713,7 +709,7 @@ document.getElementById("import-btn").addEventListener("click", async function (
 						})
 						.then(function (data) {
 							if (data.state === "running") {
-								status.textContent = data.message || "Importing…";
+								status.textContent = data.message || "Importing...";
 								return;
 							}
 							clearInterval(poll);
@@ -759,7 +755,7 @@ document.getElementById("import-btn").addEventListener("click", async function (
 
 					button.disabled = true;
 					status.classList.remove("error-text");
-					status.textContent = "Reading the shared folder…";
+					status.textContent = "Reading the shared folder...";
 
 					fetch("/cloud-import", { method: "POST", body: formData })
 						.then(function (r) {
@@ -885,7 +881,7 @@ document.getElementById("run").addEventListener("click", function () {
 
 	btn.disabled = true;
 
-	status.textContent = "Starting pipeline…";
+	status.textContent = "Starting pipeline...";
 
 	var formData = new FormData();
 	formData.append("job_id", currentJobId);
@@ -900,10 +896,17 @@ document.getElementById("run").addEventListener("click", function () {
 				btn.disabled = false;
 				return;
 			}
-			// /run returns 202 + queued when every slot is busy.
-			status.textContent = data.queued
-				? "Queued (position " + data.queue_position + "); waiting for a free pipeline slot…"
-				: "Pipeline running…";
+			// /run returns 202 + queued when every slot is busy. Rendered through the
+			// same path as a polled status so the estimates are on screen right away,
+			// rather than three seconds later when the first poll lands.
+			showRunStatus(status, {
+				done: false,
+				queued: Boolean(data.queued),
+				queue_position: data.queue_position,
+				queue_wait_seconds: data.queue_wait_seconds,
+				estimated_seconds: data.estimated_seconds,
+				started_at: null,
+			});
 			abortBtn.hidden = false;
 			abortBtn.disabled = false;
 			pollRunStatus(currentJobId);
@@ -920,7 +923,7 @@ document.getElementById("abort").addEventListener("click", function () {
 	var status = document.getElementById("run-status");
 
 	btn.disabled = true;
-	status.textContent = "Aborting…";
+	status.textContent = "Aborting...";
 
 	var formData = new FormData();
 	formData.append("job_id", currentJobId);

@@ -115,6 +115,14 @@ def pipeline_queue_path() -> Path:
 	return PROJECT_ROOT / "config" / "jobs" / ".pipeline_queue.json"
 
 
+def run_history_path() -> Path:
+	"""Durations of recent successful runs, used to estimate how long a queued
+	run will wait and how much longer a running one has to go. Kept next to the
+	queue, and on the same volume, because an estimate built from history is
+	worth nothing if a restart throws the history away."""
+	return PROJECT_ROOT / "config" / "jobs" / ".run_history.json"
+
+
 def drain_flag_path() -> Path:
 	"""Set by the host while it prepares to restart the service (see
 	deploy/refresh-databases.sh). While it exists, runs queue instead of starting,

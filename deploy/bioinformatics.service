@@ -35,12 +35,19 @@ EnvironmentFile=/etc/bioinformatics/app.env
 ExecStartPre=-/usr/bin/docker rm -f bioinformatics
 ExecStart=/usr/bin/docker run --name bioinformatics --rm \
     -p 127.0.0.1:5001:5001 \
+    -e APP_USERNAME \
     -e APP_PASSWORD \
     -e SECRET_KEY \
     -e TRUSTED_PROXY_HOPS \
     -e RESULTS_S3_BUCKET \
+    -e RESULTS_S3_PREFIX \
+    -e RESULTS_S3_PRESIGN_SECONDS \
     -e MAX_CONCURRENT_PIPELINES \
     -e PIPELINE_CORES \
+    -e BVBRC_MAX_IN_FLIGHT \
+    -e BVBRC_UPLOAD_BATCH \
+    -e RUN_REMOTE_SECONDS \
+    -e RUN_LOCAL_CORE_SECONDS_PER_SAMPLE \
     -v bioinformatics-data:/app/data \
     -v bioinformatics-results:/app/results \
     -v bioinformatics-config:/app/config/jobs \

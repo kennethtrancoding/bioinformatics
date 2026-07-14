@@ -1,6 +1,27 @@
 """
 BV-BRC Rules: Steps 4-7
 Upload reads, run genome analysis, download assembly
+
+WHAT THESE RULES COST, AND WHAT THEY DO NOT
+
+Almost all of the time a sample spends here is spent waiting on a machine that is
+not this one. The genus finder and the CGA submit a job to BV-BRC and then sleep in
+a poll loop -- 40-60 minutes for the assembly -- using no local CPU and holding no
+local data. Rationing them by cores, as a Snakemake job slot implicitly does, buys
+nothing and costs everything: it is what used to serialise a ten-sample batch into
+three sequential rounds of waiting.
+
+So they declare `cpu=0` (they compute nothing) and `bvbrc=1` (they are one of the
+jobs this run is allowed to have in flight at BV-BRC). The bvbrc pool, not the core
+count, is what decides how many samples assemble at once -- see
+BVBRC_MAX_IN_FLIGHT in workflow/lib/pipeline_manager.py.
+
+The upload is the exception, and is bounded on purpose. It is the one BV-BRC rule
+that touches a local FASTQ, and a FASTQ on disk is the scarce thing (see
+rules/raw.smk): letting the whole batch upload at once would put the whole batch's
+reads on disk at once, which is precisely what raw.smk exists to prevent. It takes
+`uploads=1` from a small pool, so reads are fed to BV-BRC a few samples at a time
+while any number of already-uploaded samples assemble in parallel.
 """
 
 rule bvbrc_upload_reads:
@@ -18,6 +39,11 @@ rule bvbrc_upload_reads:
         sample_id = lambda wildcards: wildcards.sample
     output:
         upload_log = f"{config['results_dir']}/{{sample}}/02_assembly/upload.log"
+    resources:
+        # Streams bytes to BV-BRC; the work is theirs and the network's, not this
+        # box's. Bounded instead by the reads it needs on disk to do it.
+        cpu = 0,
+        uploads = 1
     log:
         f"{config['results_dir']}/logs/{{sample}}_bvbrc_upload.log"
     group:
@@ -41,6 +67,9 @@ rule bvbrc_similar_genome_finder:
         # placeholder explaining the failure if the BV-BRC job doesn't complete),
         # so it's never left behind in a scratch/tmp location.
         kraken_report = f"{config['results_dir']}/{{sample}}/02_assembly/taxonomic_classification.txt"
+    resources:
+        cpu = 0,
+        bvbrc = 1
     log:
         f"{config['results_dir']}/logs/{{sample}}_bvbrc_genus.log"
     script:
@@ -69,6 +98,12 @@ rule bvbrc_comprehensive_genome_analysis:
         # BV-BRC taxonomy API lookup (genus -> taxon_id) used to submit the
         # job; otherwise only ever logged, never saved as its own result.
         taxonomy_lookup = f"{config['results_dir']}/{{sample}}/02_assembly/taxonomy_lookup.json"
+    resources:
+        # The 40-60 minutes are BV-BRC's, spent in a poll loop here. This is the
+        # rule the bvbrc pool exists for: with it, a batch assembles all at once
+        # instead of `cores` at a time.
+        cpu = 0,
+        bvbrc = 1
     log:
         f"{config['results_dir']}/logs/{{sample}}_bvbrc_cga.log"
     script:

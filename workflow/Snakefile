@@ -11,6 +11,27 @@ from pathlib import Path
 
 configfile: "config/config.yaml"
 
+# The cores a compute rule may actually ask for.
+#
+# Snakemake normally clamps `threads` down to `--cores`, and on a plain run that
+# is what keeps a rule from asking for more threads than the box has. Here it is
+# not: `--cores` is a job-slot budget, not a CPU count (see lib/pipeline_manager.py),
+# sized so dozens of samples can sit waiting on BV-BRC at once. It is therefore
+# always far above the real core count and never binds.
+#
+# So the compute rules have to do the clamping themselves, against this. Without
+# it their thread counts come from config.yaml alone and are simply wrong on any
+# box that does not happen to have that many cores -- and RGI does not scale down
+# when overasked, it exits non-zero ("num_threads illegal value"), which fails the
+# whole run after BV-BRC has already spent an hour assembling.
+#
+# `pipeline_cores` is passed by the web app (the PIPELINE_CORES env var); a direct
+# `snakemake` run without it falls back to this box's cores. Either way it is
+# capped by what actually exists, so a stale config can under-use the box but can
+# never overask and fail.
+HOST_CORES = os.cpu_count() or 1
+PIPELINE_CORES = max(1, min(int(config.get('pipeline_cores', HOST_CORES)), HOST_CORES))
+
 SAMPLES = {}
 if os.path.exists(config['samples_manifest']):
     samples_dataframe = pd.read_csv(config['samples_manifest'])

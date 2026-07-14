@@ -334,6 +334,9 @@ def main(argv=None):
 	argument_parser.add_argument(
 		"--timeout", type=int, default=1800, help="remote BLAST timeout (s)"
 	)
+	argument_parser.add_argument(
+		"--threads", type=int, default=4, help="threads for the local blastp tier"
+	)
 	parsed_args = argument_parser.parse_args(argv)
 
 	full_output_path = parsed_args.full_out or (
@@ -397,6 +400,7 @@ def main(argv=None):
 			parsed_args.local_db,
 			parsed_args.evalue,
 			parsed_args.max_target_seqs,
+			threads=parsed_args.threads,
 		)
 		best_local = parse_blast_tab(local_stdout) if local_stdout else {}
 		print(f"  {len(best_local)}/{len(queries)} matched a known resistance protein")
