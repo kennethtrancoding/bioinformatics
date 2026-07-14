@@ -42,7 +42,6 @@ from workflow.lib.jobs import (
 	is_valid_job_id,
 	job_data_dir,
 	job_results_dir,
-	job_run_started_path,
 	job_samples_csv,
 )
 from workflow.lib.pipeline_manager import PipelineManager
@@ -150,7 +149,22 @@ RESULTS_ROOT.mkdir(parents=True, exist_ok=True)
 
 # Limit memory-heavy pipeline processes; additional jobs wait in FIFO order.
 MAX_CONCURRENT_PIPELINES = max(1, int(os.environ.get("MAX_CONCURRENT_PIPELINES", "2")))
-PIPELINE_CORES = max(1, int(os.environ.get("PIPELINE_CORES", "4")))
+# The cores the box has, and so the budget for the rules that actually compute.
+# Capped by the cores that actually exist: a value above them is not a preference
+# the box can honour, it is a run that fails an hour in, because RGI rejects a
+# thread count higher than the CPUs it can see rather than scaling down.
+PIPELINE_CORES = max(1, min(int(os.environ.get("PIPELINE_CORES", "4")), os.cpu_count() or 1))
+# Samples a run may have assembling at BV-BRC at once. This is not a hardware
+# limit -- the assembly runs on BV-BRC's cluster and costs this box nothing but a
+# poll loop -- so it is sized for the batch, and it is what decides how quickly a
+# batch of samples gets through. Each in-flight sample is a small idle Python
+# process here (tens of MB), so it is bounded rather than unlimited: a stray
+# 200-sample job should not open 200 poll loops or dump 200 jobs on a shared
+# public service at once. Raise it if you routinely run larger batches.
+BVBRC_MAX_IN_FLIGHT = max(1, int(os.environ.get("BVBRC_MAX_IN_FLIGHT", "12")))
+# Samples that may hold raw FASTQ on local disk at once, feeding it to BV-BRC.
+# Small on purpose: peak raw disk is this many pairs, not the batch's (rules/raw.smk).
+BVBRC_UPLOAD_BATCH = max(1, int(os.environ.get("BVBRC_UPLOAD_BATCH", "4")))
 
 _job_store = JobStore()
 _pipeline_manager = PipelineManager(
@@ -159,6 +173,8 @@ _pipeline_manager = PipelineManager(
 	lambda: PROJECT_ROOT,
 	max_concurrent=MAX_CONCURRENT_PIPELINES,
 	cores=PIPELINE_CORES,
+	bvbrc_in_flight=BVBRC_MAX_IN_FLIGHT,
+	upload_batch=BVBRC_UPLOAD_BATCH,
 	popen_module=subprocess,
 )
 # Compatibility aliases for operational tooling and the existing test suite.
@@ -256,6 +272,8 @@ def _reset_run_markers(job_id):
 
 def _start_pipeline(job_id):
 	_pipeline_manager.cores = PIPELINE_CORES
+	_pipeline_manager.bvbrc_in_flight = BVBRC_MAX_IN_FLIGHT
+	_pipeline_manager.upload_batch = BVBRC_UPLOAD_BATCH
 	_pipeline_manager.start(job_id)
 
 
@@ -306,31 +324,37 @@ def _job_snapshot(job_id):
 		for isolate_id in s3_storage.list_isolates(job_id):
 			results_by_isolate[isolate_id] = {"has_report": True}
 
-	started_at = None
-	try:
-		started_at = float(job_run_started_path(job_id).read_text())
-	except (OSError, ValueError):
-		pass
+	started_at = _job_store.read_run_started(job_id)
 
 	run_status = None
 	with _pipeline_lock:
 		pipeline_process = _pipeline_processes.get(job_id)
 		queue_position = _pipeline_queue.index(job_id) + 1 if job_id in _pipeline_queue else None
+		# Both estimates are read under the lock because both are computed from the
+		# live queue and process table, which any finishing run may rewrite.
+		queue_wait_seconds = _pipeline_manager.queue_wait_seconds(job_id)
+		estimated_seconds = _pipeline_manager.estimated_seconds(job_id)
 	if queue_position is not None:
 		# Admitted but not started. Not done, and deliberately has no started_at:
-		# the run hasn't begun, so there is no elapsed time to report yet.
+		# the run hasn't begun, so there is no elapsed time to report yet -- only an
+		# estimate of how long it will sit here, which is null while draining.
 		run_status = {
 			"done": False,
 			"success": None,
 			"queued": True,
 			"queue_position": queue_position,
+			"queue_wait_seconds": queue_wait_seconds,
+			"estimated_seconds": estimated_seconds,
 			"started_at": None,
 		}
 	elif pipeline_process is not None and pipeline_process.poll() is None:
+		# started_at and estimated_seconds together are what let the page count down
+		# the time left without asking the server again every second.
 		run_status = {
 			"done": False,
 			"success": None,
 			"queued": False,
+			"estimated_seconds": estimated_seconds,
 			"started_at": started_at,
 			"finished_at": None,
 		}
