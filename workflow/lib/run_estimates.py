@@ -128,17 +128,32 @@ MINIMUM_RECORDED_SECONDS = 60
 # here makes a half-finished sample look finished, which under-counts the work and
 # under-estimates the run.
 SAMPLE_FINAL_OUTPUTS = (
-	"01_raw_qc/validation.txt",
-	"02_assembly/assembly_contigs.fasta",
-	"02_assembly/genome_report.json",
-	"03_resistance/rgi_results.json",
-	"04_blast/rgi_proteins.fasta",
-	"04_blast/blast_results.csv",
-	"04_blast/blast_results_full.tsv",
-	"05_mlst/mlst_results.txt",
-	"06_mobile_elements/me_summary.csv",
-	"06_mobile_elements/{sample}_arg_mge_colocation.csv",
-	"summary/report.html",
+	"{sample}/01_raw_qc/validation.txt",
+	"{sample}/02_assembly/assembly_contigs.fasta",
+	"{sample}/02_assembly/genome_report.json",
+	"{sample}/03_resistance/rgi_results.json",
+	"{sample}/04_blast/rgi_proteins.fasta",
+	"{sample}/04_blast/blast_results.csv",
+	"{sample}/04_blast/blast_results_full.tsv",
+	"{sample}/05_mlst/mlst_results.txt",
+	"{sample}/06_mobile_elements/me_summary.csv",
+	"{sample}/06_mobile_elements/{sample}_arg_mge_colocation.csv",
+	"{sample}/summary/report.html",
+)
+
+# What a sample has on disk once BV-BRC is done with it. This is the expensive half
+# and it has to be counted separately, because "pending" is not one thing.
+#
+# A re-run of a crashed job is the normal case, not the exception, and it is usually
+# holding samples that are assembled but not yet analysed. Judged by
+# SAMPLE_FINAL_OUTPUTS alone such a sample looks entirely undone -- so the estimate
+# charges it another hour of BV-BRC that it does not need, and then the run comes
+# back in a fraction of the quoted time and ``record`` writes that fraction down as
+# what a full run costs. One resumed run taught the old model that the pipeline was
+# 7.6x faster than it is. Counting the two stages separately is what stops that.
+SAMPLE_ASSEMBLY_OUTPUTS = (
+	"{sample}/02_assembly/assembly_contigs.fasta",
+	"{sample}/02_assembly/genome_report.json",
 )
 
 # The history is re-read for every job the status page touches -- each running
@@ -158,26 +173,40 @@ def assembly_rounds(sample_count, bvbrc_in_flight):
 	return math.ceil(max(0, sample_count) / max(1, bvbrc_in_flight))
 
 
-def baseline_seconds(sample_count, bvbrc_in_flight, cores):
-	"""What the model says a run of ``sample_count`` samples costs, before this
-	instance's own history is allowed to correct it.
+def baseline_seconds(sample_count, bvbrc_in_flight, cores, assembly_count=None):
+	"""What the model says a run costs, before this instance's own history corrects it.
 
-	The stages overlap (see THE SHAPE above), so this is the larger of the two ways
-	a run can be bound, not the sum of them."""
+	``sample_count`` is the samples with local work left to do; ``assembly_count`` is
+	the subset of those that also still owe BV-BRC an assembly. They differ on every
+	re-run of a crashed job, which is precisely when an estimate is being asked for,
+	so they are counted separately -- see SAMPLE_ASSEMBLY_OUTPUTS. When it is not
+	given, assume the worst: every sample needs everything (a cold run).
+
+	The stages overlap (see THE SHAPE above), so this is the larger of the two ways a
+	run can be bound, not the sum of them."""
 	sample_count = max(0, sample_count)
+	if assembly_count is None:
+		assembly_count = sample_count
+	assembly_count = min(max(0, assembly_count), sample_count)
+
 	if not sample_count:
-		# Nothing to do: a re-run whose every output is already on disk is a
-		# Snakemake no-op, not a round of waiting.
+		# A re-run whose every output is already on disk is a Snakemake no-op, not a
+		# round of waiting.
 		return 0.0
 
-	in_flight = max(1, bvbrc_in_flight)
 	cores = max(1, cores)
-	rounds = assembly_rounds(sample_count, in_flight)
-
-	# The last round is whatever did not fill a whole one -- and it is the only local
-	# work with no assembly still running to hide behind.
-	samples_in_last_round = sample_count - (rounds - 1) * in_flight
 	local_per_sample = LOCAL_CORE_SECONDS_PER_SAMPLE / cores
+
+	if not assembly_count:
+		# Everything is assembled already: no BV-BRC stage to hide the local work
+		# behind, so the run is exactly its local work.
+		return local_per_sample * sample_count
+
+	in_flight = max(1, bvbrc_in_flight)
+	rounds = assembly_rounds(assembly_count, in_flight)
+	# The last round is whatever did not fill a whole one. Its samples are the only
+	# ones whose local work has no assembly still running to hide behind.
+	samples_in_last_round = assembly_count - (rounds - 1) * in_flight
 
 	remote_bound = REMOTE_SECONDS * rounds + local_per_sample * samples_in_last_round
 	local_bound = REMOTE_SECONDS + local_per_sample * sample_count
@@ -189,6 +218,17 @@ def sample_is_complete(results_dir, isolate_id):
 	return all(
 		(results_dir / relative_path.format(sample=isolate_id)).is_file()
 		for relative_path in SAMPLE_FINAL_OUTPUTS
+	)
+
+
+def sample_needs_assembly(results_dir, isolate_id):
+	"""Whether this sample still owes a trip to BV-BRC -- the expensive half.
+
+	A sample that has its assembly costs a re-run no remote time at all, however
+	much local work it still has left."""
+	return not all(
+		(results_dir / relative_path.format(sample=isolate_id)).is_file()
+		for relative_path in SAMPLE_ASSEMBLY_OUTPUTS
 	)
 
 
@@ -233,29 +273,32 @@ def calibration():
 	return float(statistics.median(entry["factor"] for entry in history))
 
 
-def estimate_seconds(sample_count, bvbrc_in_flight, cores):
+def estimate_seconds(sample_count, bvbrc_in_flight, cores, assembly_count=None):
 	"""Estimated wall-clock seconds for a run of ``sample_count`` samples."""
-	return baseline_seconds(sample_count, bvbrc_in_flight, cores) * calibration()
+	return baseline_seconds(sample_count, bvbrc_in_flight, cores, assembly_count) * calibration()
 
 
-def record(sample_count, bvbrc_in_flight, cores, seconds):
+def record(sample_count, bvbrc_in_flight, cores, seconds, assembly_count=None):
 	"""Fold one finished run into the history. Only successful runs belong here:
 	a crash or an abort says nothing about how long the work takes.
 
-	``sample_count`` is what the run actually worked on. A run that skipped most of
-	its manifest did not cost a full job, and charging its length to the full
-	manifest would record the pipeline as far faster than it is.
+	``sample_count`` is what the run actually worked on, and ``assembly_count`` how
+	much of that it had to fetch from BV-BRC. Both, because a run that skipped most
+	of its manifest did not cost a full job, and neither did one that found half its
+	assemblies already on disk -- charge either against a full cold run and the
+	history learns that the pipeline is several times faster than it is.
 
 	What is stored is a ratio, not a duration, so that runs of different sizes can
 	be compared at all: a one-sample run and a ten-sample run are both evidence
 	about the same instance, and the ratio is what they have in common."""
-	baseline = baseline_seconds(sample_count, bvbrc_in_flight, cores)
+	baseline = baseline_seconds(sample_count, bvbrc_in_flight, cores, assembly_count)
 	if not baseline or seconds is None or seconds < MINIMUM_RECORDED_SECONDS:
 		return
 	entry = {
 		"finished_at": time.time(),
 		"model": MODEL_VERSION,
 		"samples": sample_count,
+		"assemblies": sample_count if assembly_count is None else assembly_count,
 		"bvbrc_in_flight": bvbrc_in_flight,
 		"cores": cores,
 		"seconds": round(float(seconds), 1),
