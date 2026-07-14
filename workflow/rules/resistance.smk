@@ -14,8 +14,25 @@ rule card_rgi_analysis:
     params:
         sample_id = lambda wildcards: wildcards.sample,
         output_prefix = f"{config['results_dir']}/{{sample}}/03_resistance/rgi_results",
-        output_format = config['card']['output_format'],
-        threads = config['resources']['max_parallel_samples']
+        output_format = config['card']['output_format']
+    # Declared, not passed as a param. RGI's -n used to come from a params entry,
+    # so Snakemake booked this rule at one core and would start `--cores` of them
+    # at once, each spawning that many RGI threads: four samples on a four-core box
+    # meant sixteen threads fighting over four cores, and RGI's 5-10 minutes
+    # stretched to match. As a directive it is a budget Snakemake honours -- it
+    # scales {threads} down to what is free, and never oversubscribes.
+    #
+    # Capped by PIPELINE_CORES (see Snakefile), never by config.yaml alone: RGI
+    # validates -n against the CPUs it can see and exits non-zero if it is higher,
+    # so a config asking for more cores than the box has does not merely oversubscribe
+    # -- it fails the run.
+    threads: min(config['resources']['max_parallel_samples'], PIPELINE_CORES)
+    resources:
+        # RGI is the heaviest local step, and --cores is no longer the CPU budget:
+        # it is a job-slot budget, sized to let dozens of samples wait on BV-BRC at
+        # once. `cpu` is the real budget, so the rule has to charge its threads to
+        # it or nothing would hold it back.
+        cpu = lambda wildcards, threads: threads
     output:
         rgi_json = f"{config['results_dir']}/{{sample}}/03_resistance/rgi_results.json",
         rgi_csv = f"{config['results_dir']}/{{sample}}/03_resistance/rgi_results.csv",
@@ -32,7 +49,7 @@ rule card_rgi_analysis:
             --input_sequence {input.assembly} \
             --output_file {output.rgi_json} \
             --input_type contig \
-            -n {params.threads} \
+            -n {threads} \
             --clean
 
         python workflow/scripts/rgi_json_to_csv.py \

@@ -29,7 +29,12 @@ rule mobile_element_finder:
         csv = f"{config['results_dir']}/{{sample}}/06_mobile_elements/{{sample}}.csv",
         result_txt = f"{config['results_dir']}/{{sample}}/06_mobile_elements/{{sample}}_result.txt",
         mge_sequences = f"{config['results_dir']}/{{sample}}/06_mobile_elements/{{sample}}_mge_sequences.fna"
-    threads: config['mobile_elements']['threads']
+    threads: min(config['mobile_elements']['threads'], PIPELINE_CORES)
+    resources:
+        # See card_rgi_analysis: --cores is a job-slot budget now, so a CPU-bound
+        # rule has to charge its threads to the `cpu` pool to stay bounded by the
+        # cores the box actually has.
+        cpu = lambda wildcards, threads: threads
     conda:
         "../envs/mefinder.yml"
     log:

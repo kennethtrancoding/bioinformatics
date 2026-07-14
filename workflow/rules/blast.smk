@@ -105,6 +105,13 @@ rule blast_ncbi_novelty:
         blast_csv = f"{config['results_dir']}/{{sample}}/04_blast/blast_results.csv",
         # Complete BLAST response from both tiers -- every hit of every query, verbatim.
         blast_full = f"{config['results_dir']}/{{sample}}/04_blast/blast_results_full.tsv"
+    # The local tier is blastp, which is CPU-bound and used to hardcode four threads
+    # while Snakemake booked this rule at a single core -- so it quietly oversubscribed
+    # the box by 4x per sample. Declared here instead, and charged to `cpu` like the
+    # other compute rules, so the thread count and the booking are the same number.
+    threads: min(config['blast']['threads'], PIPELINE_CORES)
+    resources:
+        cpu = lambda wildcards, threads: threads
     conda:
         "../envs/blast.yml"
     log:
@@ -123,5 +130,6 @@ rule blast_ncbi_novelty:
             --max-target-seqs {params.max_targets} \
             --max-queries {params.max_queries} \
             --mechanism "{params.mechanism}" \
+            --threads {threads} \
             2>&1 | tee {log}
         """

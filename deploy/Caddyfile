@@ -1,10 +1,11 @@
 # Caddy serves the public HTTPS endpoint and proxies to the app container, which
 # listens only on 127.0.0.1:5001 and is not reachable from the internet.
 #
-# Install on the EC2 host:
+# Install on the EC2 host (Ubuntu -- Caddy ships from its own apt repo, not the
+# default ones; see deploy/caddy.md for the repo setup):
 #
-#   sudo dnf install -y caddy
 #   sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
+#   sudo -u caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 #   sudo systemctl enable --now caddy
 #
 # See deploy/caddy.md for the full first-run procedure (DNS, security group).

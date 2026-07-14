@@ -95,6 +95,13 @@ class JobStore:
 			print(f"[uploads] could not record upload for job {job_id}: {exception}")
 		return upload_entry
 
+	def read_run_started(self, job_id):
+		"""When this job's pipeline process started, or None if it never did."""
+		try:
+			return float(jobs.job_run_started_path(job_id).read_text())
+		except (OSError, ValueError):
+			return None
+
 	def read_status(self, job_id):
 		try:
 			return json.loads(jobs.job_status_path(job_id).read_text())

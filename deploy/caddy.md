@@ -74,8 +74,11 @@ Then point it at this repo's config:
 sudo cp deploy/Caddyfile /etc/caddy/Caddyfile
 sudo mkdir -p /var/log/caddy && sudo chown caddy:caddy /var/log/caddy
 
-# Catch typos before a bad config burns a Let's Encrypt attempt
-caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
+# Catch typos before a bad config burns a Let's Encrypt attempt. Validate *as the
+# caddy user*: the config opens /var/log/caddy/access.log, which only that user
+# can write, so validating as yourself reports a permission error on a config
+# that is in fact fine.
+sudo -u caddy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
 
 sudo systemctl enable --now caddy
 sudo journalctl -u caddy -f     # watch the first cert issuance
@@ -112,12 +115,19 @@ Only once those pass, **remove the 5001 inbound rule from the security group**.
 Then confirm it's actually gone:
 
 ```bash
-curl -sS --max-time 5 http://50.18.236.49:5001/api/health   # must fail to connect
+curl -sS --max-time 5 http://13.57.78.169:5001/api/health   # must fail to connect
 ```
 
 That last check is the one people skip. If 5001 still answers from outside, the
 container is still publishing to `0.0.0.0` and plaintext Basic Auth is still
 exposed — at which point the security group is the only thing protecting it.
+
+Curl the **Elastic IP**, not the hostname: the hostname's port 5001 could stop
+answering merely because DNS moved, which proves nothing about the listener. And
+run it *before* pulling the security-group rule — with the rule still in place, a
+refused connection is a real result (the port is reachable, nothing is bound to
+it). Afterwards the rule blocks the packet regardless, so the check passes even
+if the container never stopped publishing to `0.0.0.0`.
 
 ## Notes
 
