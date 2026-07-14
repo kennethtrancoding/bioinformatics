@@ -191,6 +191,71 @@ def zip_directory(directory: str, arc_root: str) -> io.BytesIO:
     return buffer
 
 
+class _ChunkSink:
+    """Write target for ZipFile that hands each compressed chunk to the caller
+    instead of accumulating an archive.
+
+    It deliberately has no tell() and no seek(). That absence is load-bearing:
+    it is how zipfile detects a non-seekable stream and switches to emitting
+    data descriptors after each entry, which is what allows the archive to be
+    produced in a single forward pass with nothing held back.
+    """
+
+    def __init__(self):
+        self._chunks = []
+
+    def write(self, data):
+        self._chunks.append(bytes(data))
+        return len(data)
+
+    def flush(self):
+        pass
+
+    def drain(self):
+        chunks, self._chunks = self._chunks, []
+        return chunks
+
+
+def stream_directory_zip(directory: str, arc_root: str, chunk_size: int = 1 << 20):
+    """
+    Zip a directory's files, yielding the archive in pieces as it is built.
+
+    zip_directory's peak memory is the whole finished archive. That is survivable
+    for one isolate and fatal for a whole job, where the archive is every isolate
+    at once -- large enough to get the (single) web worker OOM-killed, which takes
+    the site down and fails whatever runs were in flight. Here memory stays bounded
+    by chunk_size no matter how large the job is.
+
+    Args:
+        directory: Directory to zip
+        arc_root: Path prefix given to each file's entry inside the archive
+        chunk_size: Bytes read from each file at a time
+
+    Yields:
+        Chunks of zip data, in order
+    """
+    directory = Path(directory)
+    sink = _ChunkSink()
+    with zipfile.ZipFile(sink, 'w', zipfile.ZIP_DEFLATED) as archive:
+        for file_path in sorted(directory.rglob('*')):
+            if not file_path.is_file():
+                continue
+            arcname = Path(arc_root) / file_path.relative_to(directory)
+            entry_info = zipfile.ZipInfo.from_file(file_path, arcname)
+            entry_info.compress_type = zipfile.ZIP_DEFLATED
+            # force_zip64: the entry's size is not known to the header when we
+            # stream it, so assume it may be over the 2GB non-zip64 ceiling. The
+            # cost on small entries is a few bytes; the cost of guessing wrong is
+            # a RuntimeError partway through the download.
+            with archive.open(entry_info, 'w', force_zip64=True) as entry:
+                with file_path.open('rb') as source:
+                    while chunk := source.read(chunk_size):
+                        entry.write(chunk)
+                        yield from sink.drain()
+            yield from sink.drain()
+    yield from sink.drain()
+
+
 # Data Parsing
 
 def load_json_safe(file_path: str, logger=None) -> dict:
