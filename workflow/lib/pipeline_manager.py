@@ -124,7 +124,7 @@ class PipelineManager:
 		log_path.parent.mkdir(parents=True, exist_ok=True)
 		results_dir = jobs.job_results_dir(job_id)
 		results_dir.mkdir(parents=True, exist_ok=True)
-		self.pending_at_start[job_id] = self.pending_sample_count(job_id)
+		self.pending_at_start[job_id] = self.pending_work(job_id)
 		jobs.job_run_started_path(job_id).write_text(str(time.time()))
 		with log_path.open("w") as pipeline_log_file:
 			process = self.popen_module.Popen(
@@ -225,21 +225,37 @@ class PipelineManager:
 		else:
 			self.return_raw(job_id)
 
-	def pending_sample_count(self, job_id):
-		"""Samples a run of this job would actually have to do.
+	def pending_work(self, job_id):
+		"""The work a run of this job would actually have to do, as
+		``(samples, assemblies)``.
 
 		Not the manifest: re-running is how a user recovers from a failed run, and
 		admission clears a job's run markers but leaves its results, so Snakemake
 		skips every sample that already finished. A re-run of a 10-sample job that
 		died on sample 7 is a 4-sample run, and costs -- and teaches -- what a
-		4-sample run costs."""
+		4-sample run costs.
+
+		Two numbers, not one, because the two stages are skipped independently. The
+		usual re-run is a job that got its assemblies and then died in the local
+		analysis: those samples are nowhere near complete, but they owe BV-BRC
+		nothing, and quoting them another hour of it is how the estimate ends up
+		hours too long and the history ends up believing a cold run is cheap."""
 		sample_rows, _ = self.job_store.read_samples(jobs.job_samples_csv(job_id))
 		results_dir = jobs.job_results_dir(job_id)
-		return sum(
-			1
-			for sample_row in sample_rows
-			if not run_estimates.sample_is_complete(results_dir, sample_row.get("isolate_id", ""))
-		)
+		samples = 0
+		assemblies = 0
+		for sample_row in sample_rows:
+			isolate_id = sample_row.get("isolate_id", "")
+			if run_estimates.sample_is_complete(results_dir, isolate_id):
+				continue
+			samples += 1
+			if run_estimates.sample_needs_assembly(results_dir, isolate_id):
+				assemblies += 1
+		return samples, assemblies
+
+	def pending_sample_count(self, job_id):
+		"""Samples a run of this job would have to do. See ``pending_work``."""
+		return self.pending_work(job_id)[0]
 
 	def estimated_seconds(self, job_id):
 		"""How long this job's run should take, by the history of past runs. A job
@@ -247,8 +263,11 @@ class PipelineManager:
 		by the work it has now."""
 		pending = self.pending_at_start.get(job_id)
 		if pending is None:
-			pending = self.pending_sample_count(job_id)
-		return run_estimates.estimate_seconds(pending, self.bvbrc_in_flight, self.cores)
+			pending = self.pending_work(job_id)
+		samples, assemblies = pending
+		return run_estimates.estimate_seconds(
+			samples, self.bvbrc_in_flight, self.cores, assemblies
+		)
 
 	def remaining_seconds(self, job_id, now=None):
 		"""How much longer a running job has. A run that has already outlasted its
@@ -294,11 +313,15 @@ class PipelineManager:
 		# eight of ten samples came back fast because it did little, and charging
 		# its length to ten samples' worth of work would record the pipeline as a
 		# fraction of its real cost and drag every later estimate down with it.
+		# Both halves of that, separately -- a run that found its assemblies already
+		# on disk skipped the expensive stage even though it did every sample.
+		samples, assemblies = self.pending_at_start.get(job_id, (0, 0))
 		run_estimates.record(
-			self.pending_at_start.get(job_id, 0),
+			samples,
 			self.bvbrc_in_flight,
 			self.cores,
 			time.time() - started_at,
+			assemblies,
 		)
 
 	def is_busy(self, job_id):
