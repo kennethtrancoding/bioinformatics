@@ -282,6 +282,7 @@ def import_directory(
 	dest_dir=None,
 	verify_checksums=True,
 	move=False,
+	on_pair_imported=None,
 ):
 	"""
 	Pair FASTQs in `directory` and merge them into the sample manifest.
@@ -297,6 +298,14 @@ def import_directory(
 	checked against the sheet's R1/R2 md5sum columns. A pair that fails is left
 	out of the manifest (and any copy of it removed) so bad data never enters the
 	pipeline. Files with no matching row in the sheet are imported unverified.
+
+	`on_pair_imported(isolate_id, registered_paths)` runs after each pair is
+	verified and registered, while the rest of the batch is still unprocessed --
+	the web upload uses it to push that pair to S3 and drop the local copy, so
+	peak disk tracks one pair instead of the whole folder. It is only called when
+	`dest_dir` is set: the paths handed to it are then copies this function made
+	and the callback is free to delete them, whereas an in-place import registers
+	the caller's own files and deleting those would destroy the originals.
 
 	Existing isolates are updated in place (idempotent — safe to re-run).
 	Returns a summary dict:
@@ -391,6 +400,13 @@ def import_directory(
 			added.append(fastq_pair["isolate_id"])
 		if expected_checksums:
 			verified.append(fastq_pair["isolate_id"])
+
+		# Hand the pair off before touching the next one. The manifest below is
+		# written from rows_by_isolate_id, not from the files, so the callback may
+		# take the copies away -- and for a large folder it must, or every read in
+		# the batch would sit on disk until the last pair was registered.
+		if on_pair_imported and dest_dir:
+			on_pair_imported(fastq_pair["isolate_id"], dict(registered_paths))
 
 	samples_csv = Path(samples_csv)
 	samples_csv.parent.mkdir(parents=True, exist_ok=True)

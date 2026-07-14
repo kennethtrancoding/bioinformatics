@@ -101,6 +101,20 @@ class ImportService:
 					raw_paths.append(self.project_root() / manifest_path)
 		return raw_paths
 
+	def offload_pair(self, job_id, registered_paths):
+		"""Send one freshly imported pair to S3 and drop the local copy.
+
+		Called by import_directory as each pair lands, rather than once the whole
+		folder has been registered: the reads are only needed locally long enough to
+		verify and upload them, so releasing per pair keeps peak disk at one pair
+		instead of the size of the batch. A read S3 refused stays on disk --
+		backup_raw_files only returns what it confirmed -- so it is never missing
+		from both places at once."""
+		self.release_local_raw(
+			job_id,
+			*self.backup_raw_files(job_id, [Path(path) for path in registered_paths.values()]),
+		)
+
 	def import_directory(self, job_id, source_dir, samples_csv, data_dir, method, started_at):
 		with self.job_lock(job_id):
 			result = import_samples.import_directory(
@@ -109,6 +123,9 @@ class ImportService:
 				recursive=True,
 				dest_dir=data_dir,
 				move=True,
+				on_pair_imported=lambda isolate_id, registered_paths: self.offload_pair(
+					job_id, registered_paths
+				),
 			)
 			result["upload"] = self.job_store.record_upload(
 				job_id, method, started_at, result["added"], result["updated"]

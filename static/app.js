@@ -65,6 +65,12 @@ function basename(p) {
 	return p ? p.split("/").pop() : "";
 }
 
+function formatBytes(bytes) {
+	if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(1) + " GB";
+	if (bytes >= 1024 * 1024) return Math.round(bytes / (1024 * 1024)) + " MB";
+	return Math.round(bytes / 1024) + " KB";
+}
+
 function formatDuration(seconds) {
 	if (seconds === null || seconds === undefined || !isFinite(seconds) || seconds < 0) {
 		return "";
@@ -408,6 +414,140 @@ function afterUpload(jobId) {
 	});
 }
 
+// A run folder goes up as several bounded POSTs rather than one huge one.
+// Werkzeug buffers a whole request body to disk before /import ever runs, so a
+// single 20 GB folder needs 20 GB of scratch space (plus the staging copy) before
+// the server can release anything to S3 -- and one dropped connection costs the
+// entire upload. Batching caps the server's peak disk at roughly twice this
+// figure and lets a failed batch be retried on its own.
+var IMPORT_BATCH_BYTES = 2 * 1024 * 1024 * 1024;
+
+// Mirrors _FASTQ_SUFFIX / _R1_MARKER / _ISOLATE_RE in workflow/lib/import_samples.py.
+// The pairing has to agree with the server's: an R1 and its R2 must ride in the
+// same batch, or the server finds no mate for it and skips the sample entirely.
+var FASTQ_SUFFIXES = [".fastq.gz", ".fq.gz", ".fastq", ".fq"];
+var R1_MARKER = /_R1([_.])/;
+var ISOLATE_RE = /_R[12][_.].*$/;
+
+function uploadName(file) {
+	return file.webkitRelativePath || file.name;
+}
+
+function isFastq(fileName) {
+	var lowerCaseName = fileName.toLowerCase();
+	return FASTQ_SUFFIXES.some(function (suffix) {
+		return lowerCaseName.endsWith(suffix);
+	});
+}
+
+function isolateIdFor(fileName) {
+	return fileName.replace(ISOLATE_RE, "");
+}
+
+// Split the folder into units that must not be divided across batches: each
+// R1/R2 pair, plus each FASTQ with no mate (kept, rather than dropped here, so
+// the server still reports it as unpaired instead of it vanishing silently).
+function importUnits(files) {
+	var fastqsByName = {};
+	var nonFastqFiles = [];
+	for (var i = 0; i < files.length; i++) {
+		var fileName = basename(uploadName(files[i]));
+		if (isFastq(fileName)) fastqsByName[fileName] = files[i];
+		else nonFastqFiles.push(files[i]);
+	}
+
+	var units = [];
+	var pairedNames = {};
+	Object.keys(fastqsByName)
+		.sort()
+		.forEach(function (fileName) {
+			if (!R1_MARKER.test(fileName)) return;
+			var mateName = fileName.replace(R1_MARKER, "_R2$1");
+			if (!fastqsByName[mateName]) return;
+			pairedNames[fileName] = pairedNames[mateName] = true;
+			units.push([fastqsByName[fileName], fastqsByName[mateName]]);
+		});
+	Object.keys(fastqsByName).forEach(function (fileName) {
+		if (!pairedNames[fileName]) units.push([fastqsByName[fileName]]);
+	});
+
+	return { units: units, nonFastqFiles: nonFastqFiles };
+}
+
+function totalBytes(files) {
+	return files.reduce(function (runningTotal, file) {
+		return runningTotal + file.size;
+	}, 0);
+}
+
+// Resuming: a retry re-sends only the pairs the job does not already hold, so a
+// failure at the last batch of a 20 GB folder does not mean re-sending the
+// first 18 GB. Re-importing a sample it does hold is harmless (the manifest
+// updates in place), just wasted bandwidth.
+function unsentUnits(units) {
+	if (!currentJobId) return Promise.resolve(units);
+	return fetchJob(currentJobId)
+		.then(function (res) {
+			if (!res.ok || !res.d || !res.d.samples) return units;
+			var registeredIsolates = {};
+			res.d.samples.forEach(function (sample) {
+				registeredIsolates[sample.isolate_id] = true;
+			});
+			return units.filter(function (unit) {
+				return !registeredIsolates[isolateIdFor(basename(uploadName(unit[0])))];
+			});
+		})
+		.catch(function () {
+			return units;
+		});
+}
+
+function importBatches(units, nonFastqFiles) {
+	// find_stats_xlsx only looks at the top level of the directory it is handed,
+	// and it is what decides whether MD5s get verified at all -- so the stats
+	// workbook has to ride along in every batch, not just the first. It is a
+	// spreadsheet; the duplication costs nothing.
+	var workbooks = nonFastqFiles.filter(function (file) {
+		return basename(uploadName(file)).toLowerCase().endsWith(".xlsx");
+	});
+	var otherFiles = nonFastqFiles.filter(function (file) {
+		return workbooks.indexOf(file) === -1;
+	});
+
+	var batches = [];
+	var currentBatch = [];
+	var currentBatchBytes = 0;
+	units.forEach(function (unit) {
+		var unitBytes = totalBytes(unit);
+		if (currentBatch.length && currentBatchBytes + unitBytes > IMPORT_BATCH_BYTES) {
+			batches.push(currentBatch);
+			currentBatch = [];
+			currentBatchBytes = 0;
+		}
+		currentBatch = currentBatch.concat(unit);
+		currentBatchBytes += unitBytes;
+	});
+	if (currentBatch.length) batches.push(currentBatch);
+	if (!batches.length) batches.push([]);
+
+	return batches.map(function (batch, batchIndex) {
+		return (batchIndex === 0 ? otherFiles : []).concat(workbooks, batch);
+	});
+}
+
+// Fold each batch's result into one summary, so the user reads a single line
+// about the folder rather than one per batch.
+function mergeImportResult(summary, batchResult) {
+	["added", "updated", "verified", "failed", "warnings"].forEach(function (field) {
+		summary[field] = summary[field].concat(batchResult[field] || []);
+	});
+	summary.skipped += batchResult.skipped || 0;
+	summary.checksum_source = batchResult.checksum_source || summary.checksum_source;
+	if (batchResult.upload) summary.upload.seconds += batchResult.upload.seconds || 0;
+	summary.job_id = batchResult.job_id;
+	return summary;
+}
+
 document.getElementById("import-btn").addEventListener("click", async function () {
 	var status = document.getElementById("import-status");
 	var files = document.getElementById("import-folder").files;
@@ -415,37 +555,84 @@ document.getElementById("import-btn").addEventListener("click", async function (
 		status.textContent = "Choose a folder first.";
 		return;
 	}
-	var formData = new FormData();
-	for (var i = 0; i < files.length; i++) {
-		var f = files[i];
-		formData.append("files", f, f.webkitRelativePath || f.name);
-	}
-	try {
-		formData = await addBatchFields(formData);
-	} catch (error) {
-		status.textContent = error.message;
+
+	var grouped = importUnits(files);
+	var units = await unsentUnits(grouped.units);
+	if (grouped.units.length && !units.length) {
+		status.textContent = "Every sample in this folder is already in the batch — nothing to send.";
 		return;
 	}
+	var batches = importBatches(units, grouped.nonFastqFiles);
+	// Measured over the batches, not the folder, so the total counts what actually
+	// goes over the wire -- including the workbook each batch carries a copy of.
+	var bytesToSend = batches.reduce(function (runningTotal, batch) {
+		return runningTotal + totalBytes(batch);
+	}, 0);
+	var bytesSent = 0;
 
-	status.textContent =
-		"Uploading " + files.length + " file(s)… this can take a while for large folders.";
-	fetch("/import", { method: "POST", body: formData })
-		.then(function (r) {
-			return r.json().then(function (d) {
-				return { ok: r.ok, d: d };
-			});
-		})
-		.then(function (res) {
-			if (!res.ok) {
-				status.textContent = "Error: " + res.d.error;
-				return;
-			}
-			status.textContent = importSummary(res.d);
-			afterUpload(res.d.job_id);
-		})
-		.catch(function () {
-			status.textContent = "Import failed to run.";
+	var summary = {
+		added: [],
+		updated: [],
+		verified: [],
+		failed: [],
+		warnings: [],
+		skipped: 0,
+		checksum_source: null,
+		upload: { seconds: 0 },
+	};
+
+	for (var batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+		var batch = batches[batchIndex];
+		var formData = new FormData();
+		batch.forEach(function (file) {
+			formData.append("files", file, uploadName(file));
 		});
+		try {
+			formData = await addBatchFields(formData);
+		} catch (error) {
+			status.textContent = error.message;
+			return;
+		}
+
+		status.textContent =
+			"Uploading batch " +
+			(batchIndex + 1) +
+			" of " +
+			batches.length +
+			" — " +
+			formatBytes(bytesSent) +
+			" of " +
+			formatBytes(bytesToSend) +
+			" sent.";
+
+		var response;
+		var data;
+		try {
+			response = await fetch("/import", { method: "POST", body: formData });
+			data = await response.json();
+		} catch (error) {
+			status.textContent =
+				"Import failed on batch " +
+				(batchIndex + 1) +
+				" of " +
+				batches.length +
+				". Everything before it is already saved — import the same folder again to send the rest.";
+			if (summary.job_id) afterUpload(summary.job_id);
+			return;
+		}
+		if (!response.ok) {
+			status.textContent =
+				"Error on batch " + (batchIndex + 1) + " of " + batches.length + ": " + data.error;
+			if (summary.job_id) afterUpload(summary.job_id);
+			return;
+		}
+
+		mergeImportResult(summary, data);
+		bytesSent += totalBytes(batch);
+	}
+
+	status.textContent = importSummary(summary);
+	afterUpload(summary.job_id);
 });
 
 /* Cloud import is disabled; the fieldset it drives is commented out in
