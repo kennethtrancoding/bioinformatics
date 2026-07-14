@@ -71,6 +71,23 @@ function formatBytes(bytes) {
 	return Math.round(bytes / 1024) + " KB";
 }
 
+// A 21 GB run folder is a two-hour upload on a home connection, so the estimate
+// is what separates "this is working" from "this is stuck". Extrapolated from the
+// rate achieved so far, which settles down within the first minute.
+function remainingText(bytesSent, bytesTotal, startedAt) {
+	var elapsedSeconds = (Date.now() - startedAt) / 1000;
+	if (elapsedSeconds < 5 || !bytesSent) return "";
+	var secondsLeft = ((bytesTotal - bytesSent) / bytesSent) * elapsedSeconds;
+	if (secondsLeft < 60) return " — under a minute left";
+	var hours = Math.floor(secondsLeft / 3600);
+	var minutes = Math.round((secondsLeft - hours * 3600) / 60);
+	if (minutes === 60) {
+		hours += 1;
+		minutes = 0;
+	}
+	return " — about " + (hours ? hours + "h " + minutes + "m" : minutes + "m") + " left";
+}
+
 function formatDuration(seconds) {
 	if (seconds === null || seconds === undefined || !isFinite(seconds) || seconds < 0) {
 		return "";
@@ -548,6 +565,37 @@ function mergeImportResult(summary, batchResult) {
 	return summary;
 }
 
+// POST one batch, reporting bytes as they leave the browser. This is the one
+// place the app cannot use fetch(): fetch has no upload-progress event, so a
+// batch that takes fifteen minutes on a slow link would sit at the same byte
+// count from start to finish and read as hung. Only XHR exposes xhr.upload.
+function postImportBatch(formData, onBytesSent) {
+	return new Promise(function (resolve, reject) {
+		var request = new XMLHttpRequest();
+		request.open("POST", "/import");
+		request.upload.addEventListener("progress", function (event) {
+			if (event.lengthComputable) onBytesSent(event.loaded, event.total);
+		});
+		request.addEventListener("load", function () {
+			var data;
+			try {
+				data = JSON.parse(request.responseText);
+			} catch (error) {
+				reject(new Error("The server's reply was not readable."));
+				return;
+			}
+			resolve({ ok: request.status >= 200 && request.status < 300, data: data });
+		});
+		request.addEventListener("error", function () {
+			reject(new Error("The connection dropped."));
+		});
+		request.addEventListener("timeout", function () {
+			reject(new Error("The connection timed out."));
+		});
+		request.send(formData);
+	});
+}
+
 document.getElementById("import-btn").addEventListener("click", async function () {
 	var status = document.getElementById("import-status");
 	var files = document.getElementById("import-folder").files;
@@ -569,6 +617,7 @@ document.getElementById("import-btn").addEventListener("click", async function (
 		return runningTotal + totalBytes(batch);
 	}, 0);
 	var bytesSent = 0;
+	var startedAt = Date.now();
 
 	var summary = {
 		added: [],
@@ -594,41 +643,54 @@ document.getElementById("import-btn").addEventListener("click", async function (
 			return;
 		}
 
-		status.textContent =
-			"Uploading batch " +
-			(batchIndex + 1) +
-			" of " +
-			batches.length +
-			" — " +
-			formatBytes(bytesSent) +
-			" of " +
-			formatBytes(bytesToSend) +
-			" sent.";
+		var batchLabel = "batch " + (batchIndex + 1) + " of " + batches.length;
+		var bytesSentBeforeBatch = bytesSent;
+		// Covers the gap before the first progress event: without it the line would
+		// still show the previous batch's numbers while this one spins up.
+		status.textContent = "Uploading " + batchLabel + " — starting…";
 
-		var response;
-		var data;
+		var result;
 		try {
-			response = await fetch("/import", { method: "POST", body: formData });
-			data = await response.json();
+			result = await postImportBatch(formData, function (batchBytesSent, batchBytesTotal) {
+				bytesSent = bytesSentBeforeBatch + batchBytesSent;
+				if (batchBytesSent < batchBytesTotal) {
+					status.textContent =
+						"Uploading " +
+						batchLabel +
+						" — " +
+						formatBytes(bytesSent) +
+						" of " +
+						formatBytes(bytesToSend) +
+						" (" +
+						Math.floor((bytesSent / bytesToSend) * 100) +
+						"%)" +
+						remainingText(bytesSent, bytesToSend, startedAt);
+				} else {
+					// The bytes are up but the request is not done: the server still has
+					// to verify each pair's MD5 and push it to S3, which for a 2 GB batch
+					// is not instant. Saying so beats a progress line frozen at 100%.
+					status.textContent =
+						"Uploaded " + batchLabel + " — verifying checksums and copying to S3…";
+				}
+			});
 		} catch (error) {
 			status.textContent =
-				"Import failed on batch " +
-				(batchIndex + 1) +
-				" of " +
-				batches.length +
-				". Everything before it is already saved — import the same folder again to send the rest.";
+				"Import stopped on " +
+				batchLabel +
+				": " +
+				error.message +
+				" Everything before it is saved — import the same folder again to send the rest.";
 			if (summary.job_id) afterUpload(summary.job_id);
 			return;
 		}
-		if (!response.ok) {
-			status.textContent =
-				"Error on batch " + (batchIndex + 1) + " of " + batches.length + ": " + data.error;
+		if (!result.ok) {
+			status.textContent = "Error on " + batchLabel + ": " + result.data.error;
 			if (summary.job_id) afterUpload(summary.job_id);
 			return;
 		}
 
-		mergeImportResult(summary, data);
-		bytesSent += totalBytes(batch);
+		mergeImportResult(summary, result.data);
+		bytesSent = bytesSentBeforeBatch + totalBytes(batch);
 	}
 
 	status.textContent = importSummary(summary);
