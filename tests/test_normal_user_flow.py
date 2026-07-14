@@ -379,9 +379,11 @@ class NormalUserFlow(Base):
 		self.assertAlmostEqual(manager.estimated_seconds(job_id), one_sample)
 
 		# The re-run is quoted that one sample, and stays quoted it: the estimate is
-		# the size of the run, and a run does not shrink as its samples land.
+		# the size of the run, and a run does not shrink as its samples land. The work
+		# is two numbers -- the sample still owes local analysis, and it still owes an
+		# assembly -- because the stages are skipped independently.
 		self.start(job_id)
-		self.assertEqual(manager.pending_at_start[job_id], 1)
+		self.assertEqual(manager.pending_at_start[job_id], (1, 1))
 		self.assertAlmostEqual(
 			self.client.get(f"/status?job_id={job_id}").get_json()["estimated_seconds"],
 			one_sample,
@@ -394,14 +396,81 @@ class NormalUserFlow(Base):
 		# said a single sample should would have "proved" the instance runs
 		# five_samples/one_sample times faster than it does, and every later estimate
 		# would have been cut by that much.
-		run_estimates.record(
-			manager.pending_at_start[job_id], in_flight, cores, one_sample
-		)
+		samples, assemblies = manager.pending_at_start[job_id]
+		run_estimates.record(samples, in_flight, cores, one_sample, assemblies)
 		self.assertEqual(run_estimates.calibration(), 1.0)
 
 		# A job with nothing left to do is a Snakemake no-op, not a run of work.
 		self.assertEqual(manager.pending_sample_count(job_id), 0)
 		self.assertEqual(run_estimates.estimate_seconds(0, in_flight, cores), 0)
+
+	def test_a_finished_sample_is_recognised_at_the_path_the_pipeline_writes_it_to(self):
+		"""The outputs are looked for where Snakemake actually puts them.
+
+		They live under results/<job>/<sample>/, and the lists here once left the
+		<sample>/ out -- so every path checked was one that never exists, every sample
+		looked unfinished forever, and a re-run was quoted (and recorded) as though it
+		had its whole manifest still to do. It passed its tests, because the helper
+		that faked a finished sample wrote the same wrong paths. So this test builds
+		the outputs from the Snakefile's own layout instead."""
+		job_id = self.runnable(self.submit_pair("PATHS").get_json()["job_id"])
+		results_dir = jobs.job_results_dir(job_id)
+		manager = frontend._pipeline_manager
+
+		self.assertEqual(manager.pending_work(job_id), (1, 1))
+
+		# Exactly what workflow/Snakefile's get_all_outputs() asks for, written to the
+		# per-sample directory the rules write to.
+		for relative_path in (
+			"PATHS/01_raw_qc/validation.txt",
+			"PATHS/02_assembly/assembly_contigs.fasta",
+			"PATHS/02_assembly/genome_report.json",
+			"PATHS/03_resistance/rgi_results.json",
+			"PATHS/04_blast/rgi_proteins.fasta",
+			"PATHS/04_blast/blast_results.csv",
+			"PATHS/04_blast/blast_results_full.tsv",
+			"PATHS/05_mlst/mlst_results.txt",
+			"PATHS/06_mobile_elements/me_summary.csv",
+			"PATHS/06_mobile_elements/PATHS_arg_mge_colocation.csv",
+			"PATHS/summary/report.html",
+		):
+			output_path = results_dir / relative_path
+			output_path.parent.mkdir(parents=True, exist_ok=True)
+			output_path.write_text("")
+
+		# Seen as done -- which is the whole point, and what the missing <sample>/ broke.
+		self.assertTrue(run_estimates.sample_is_complete(results_dir, "PATHS"))
+		self.assertFalse(run_estimates.sample_needs_assembly(results_dir, "PATHS"))
+		self.assertEqual(manager.pending_work(job_id), (0, 0))
+
+	def test_an_assembled_sample_is_not_charged_another_trip_to_bv_brc(self):
+		"""The usual re-run: BV-BRC is done, the local analysis is not.
+
+		Such a sample is nowhere near complete, but it owes the expensive stage
+		nothing. Quoting it another assembly is how a re-run reads hours too long --
+		and then finishes in a fraction of that and teaches the history that a cold
+		run is cheap."""
+		in_flight = frontend.BVBRC_MAX_IN_FLIGHT
+		cores = frontend.PIPELINE_CORES
+		job_id = self.runnable(self.submit_pair("ASM").get_json()["job_id"])
+		results_dir = jobs.job_results_dir(job_id)
+		manager = frontend._pipeline_manager
+
+		for relative_path in run_estimates.SAMPLE_ASSEMBLY_OUTPUTS:
+			output_path = results_dir / relative_path.format(sample="ASM")
+			output_path.parent.mkdir(parents=True, exist_ok=True)
+			output_path.write_text("")
+
+		# Still a sample's worth of local work, but no assembly left to wait on.
+		self.assertEqual(manager.pending_work(job_id), (1, 0))
+		self.assertFalse(run_estimates.sample_is_complete(results_dir, "ASM"))
+
+		local_only = run_estimates.baseline_seconds(1, in_flight, cores, 0)
+		cold = run_estimates.baseline_seconds(1, in_flight, cores, 1)
+		self.assertAlmostEqual(manager.estimated_seconds(job_id), local_only)
+		self.assertLess(local_only, cold)
+		# The difference is exactly the assembly it no longer has to wait for.
+		self.assertAlmostEqual(cold - local_only, run_estimates.REMOTE_SECONDS)
 
 	def test_bvbrc_waits_are_bounded_by_their_own_pool_and_not_by_this_box_s_cores(self):
 		"""The 40-60 minutes a sample spends assembling is spent waiting on BV-BRC's
