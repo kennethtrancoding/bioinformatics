@@ -105,11 +105,18 @@ rule blast_ncbi_novelty:
         blast_csv = f"{config['results_dir']}/{{sample}}/04_blast/blast_results.csv",
         # Complete BLAST response from both tiers -- every hit of every query, verbatim.
         blast_full = f"{config['results_dir']}/{{sample}}/04_blast/blast_results_full.tsv"
-    # The local tier is blastp, which is CPU-bound and used to hardcode four threads
-    # while Snakemake booked this rule at a single core -- so it quietly oversubscribed
-    # the box by 4x per sample. Declared here instead, and charged to `cpu` like the
-    # other compute rules, so the thread count and the booking are the same number.
-    threads: min(config['blast']['threads'], PIPELINE_CORES)
+    # blastp is CPU-bound, so its thread count and its booking have to be the same
+    # number -- it used to hardcode four threads while Snakemake booked this rule at
+    # one core, quietly oversubscribing the box 4x per sample.
+    #
+    # But this rule is not only blastp. Tier 2 goes out to NCBI, where it can sit for
+    # `remote_timeout_seconds` (30 min) holding cores and using none of them, and
+    # Snakemake cannot release a booking part-way through a rule. So the booking has
+    # to be one the box can afford to have idle for half an hour: never more than half
+    # the CPU pool, so RGI and MEF can still run while this one waits. On a 2-core box
+    # that is a single core -- which costs tier 1 nothing, since it is a handful of
+    # enzymes against a 10k-protein catalog and takes seconds at any thread count.
+    threads: max(1, min(config['blast']['threads'], PIPELINE_CORES // 2))
     resources:
         cpu = lambda wildcards, threads: threads
     conda:
