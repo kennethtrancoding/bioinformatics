@@ -97,9 +97,7 @@ function activeRunText(runStatus) {
 		if (runStatus.queue_wait_seconds === null || runStatus.queue_wait_seconds === undefined) {
 			return `${queuedText}; waiting for a free pipeline slot...`;
 		}
-		var secondsSinceStatus = currentRunStatusAt
-			? Date.now() / 1000 - currentRunStatusAt
-			: 0;
+		var secondsSinceStatus = currentRunStatusAt ? Date.now() / 1000 - currentRunStatusAt : 0;
 		var secondsToStart = Math.max(0, runStatus.queue_wait_seconds - secondsSinceStatus);
 		return `${queuedText} starts in ${formatDuration(secondsToStart)}, then runs for ${formatDuration(runStatus.estimated_seconds)} (estimates)`;
 	}
@@ -163,16 +161,16 @@ function showRunStatus(el, runStatus) {
 	stopRunTicker();
 	var took =
 		runStatus.started_at && runStatus.finished_at
-			? " Took " + formatDuration(runStatus.finished_at - runStatus.started_at) + "."
+			? formatDuration(runStatus.finished_at - runStatus.started_at)
 			: "";
 	if (runStatus.success) {
-		el.textContent = "Pipeline complete." + took;
+		el.textContent = `Pipeline complete: took ${took}.`;
 		el.classList.remove("error-text");
 
 		runPipelineButton.hidden = true;
 		return;
 	}
-	el.textContent = "Pipeline CRASHED at " + took;
+	el.textContent = `Pipeline CRASHED at ${took}.`;
 	el.classList.add("error-text");
 }
 
