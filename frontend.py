@@ -880,13 +880,9 @@ def import_folder():
 		except Exception as exception:
 			return jsonify({"error": str(exception)}), 500
 		import_result["job_id"] = job_id
-		_release_local_raw(
-			job_id,
-			*_backup_raw_files_to_s3(
-				job_id,
-				_raw_paths_for_isolates(job_id, import_result["added"] + import_result["updated"]),
-			),
-		)
+		# No backup pass here: ImportService pushed each pair to S3 and released the
+		# local copy as import_directory registered it, so by now the reads this
+		# request added are already durable and off the disk.
 		import_result["auto_run"] = _auto_run_if_requested(job_id, request.form)
 		return jsonify(import_result), 200
 	finally:
