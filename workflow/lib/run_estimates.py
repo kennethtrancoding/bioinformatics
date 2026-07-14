@@ -49,18 +49,33 @@ successful run divides what it actually took by what this model predicted it wou
 take, and stores the ratio. The estimate is that baseline times the median of the
 recent ratios -- the median rather than the mean so that one BV-BRC outage that
 stretched a run to six hours does not poison every estimate after it. A fresh
-instance has no ratios and trusts the model as written (a factor of 1.0), which is
-why the two constants below are anchored on the README's figures rather than on
-anything convenient: one sample on the default four cores is 5400 + 3600/4 = 6300s,
-which is the 1h45m the README quotes for a full sample.
+instance has no ratios and trusts the model as written (a factor of 1.0).
 
-N is the samples the run *has to do*, not the samples in the manifest. Re-running
-is how a user recovers from a failed run, and a re-run keeps every sample that
-already finished: admission clears the run markers but not the results, so
-Snakemake finds those outputs on disk and skips them. Counting them would quote the
-re-run a full job's runtime and then, when it came back in a fraction of that,
-record the fraction as the cost of a full job -- teaching every later estimate that
-the pipeline is several times faster than it is. See ``sample_is_complete``.
+The two constants below are measured, from a real 48-sample run, and the numbers
+that produced them are recorded next to each. They were guesses once -- anchored on
+the README rather than on anything the pipeline had been observed to do -- and the
+local one was six times too big, which is how a five-hour batch came to be quoted at
+thirty. Re-measure them; do not re-guess them.
+
+Note that this is a model, not a learned one. The shape is arithmetic about pools
+and cores, not a pattern to be discovered from data: ceil(N / in_flight) is what a
+pool of twelve slots *does*. Only the scale is learned, and it is one number.
+
+THE WORK IS TWO NUMBERS, NOT ONE
+
+What a run has to do is the samples it has to do -- not the manifest. Re-running is
+how a user recovers from a failed run, and a re-run keeps everything already on
+disk: admission clears the run markers but not the results, so Snakemake skips what
+it finds. But "skipped" is not all-or-nothing, because the two stages are skipped
+independently, and the usual re-run is a job that got its assemblies and then died
+in the local analysis. Those samples are nowhere near complete and owe BV-BRC
+nothing.
+
+So the work is counted as (samples, assemblies), and both matter. Charge a re-run
+for assemblies it already has and it reads hours too long -- and then it finishes in
+a fraction of that, and ``record`` writes the fraction down as the cost of a cold
+run, teaching every later estimate that the pipeline is several times faster than it
+is. See ``sample_is_complete`` and ``sample_needs_assembly``.
 
 It is an estimate, and a crude one. One ratio cannot tell a slow BV-BRC queue apart
 from a slow box, and nothing here knows whether the run had the machine to itself
@@ -309,7 +324,9 @@ def record(sample_count, bvbrc_in_flight, cores, seconds, assembly_count=None):
 	try:
 		history_path.parent.mkdir(parents=True, exist_ok=True)
 		temporary_path = history_path.with_name(history_path.name + ".tmp")
-		temporary_path.write_text(json.dumps((_read_history() + [entry])[-HISTORY_LIMIT:], indent=2))
+		temporary_path.write_text(
+			json.dumps((_read_history() + [entry])[-HISTORY_LIMIT:], indent=2)
+		)
 		temporary_path.replace(history_path)
 	except OSError as exception:
 		# An estimate is a nicety; losing one must never fail a run that worked.
