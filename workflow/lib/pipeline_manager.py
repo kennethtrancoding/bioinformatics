@@ -138,6 +138,22 @@ class PipelineManager:
 					f"bvbrc={self.bvbrc_in_flight}",
 					f"uploads={self.upload_batch}",
 					"--use-conda", "--rerun-incomplete",
+					# Re-run a step only when its output is actually missing or stale in time.
+					#
+					# Snakemake's default triggers also include `code` and `params`, which are
+					# wrong for this workflow: most steps here are not local computations that
+					# a new release can simply redo. Uploading 48 read pairs to BV-BRC costs
+					# half an hour of somebody else's bandwidth, and an assembly is an hour of
+					# their cluster. Under the default triggers, editing a comment in a rule
+					# file marks every one of those steps out of date, and the next resumed run
+					# re-uploads reads that are already sitting in the workspace and reassembles
+					# genomes that are already assembled.
+					#
+					# The cost of this: after a genuine fix to a rule's logic, outputs that
+					# already exist are NOT recomputed -- delete them (or --forcerun) to redo
+					# them. That is the right trade when the output is an assembly, which does
+					# not change because our code did.
+					"--rerun-triggers", "mtime",
 					"--nolock", "--config", f"job_id={job_id}",
 					f"results_dir={results_dir.relative_to(self.project_root())}",
 					f"samples_manifest={jobs.job_samples_csv(job_id).relative_to(self.project_root())}",
