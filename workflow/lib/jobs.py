@@ -72,6 +72,14 @@ def job_status_path(job_id: str) -> Path:
 	return job_results_dir(job_id) / ".run_status.json"
 
 
+def job_run_admitted_path(job_id: str) -> Path:
+	"""Epoch timestamp written when the job is admitted to run -- the moment its
+	wait for a slot begins. On disk, not in memory, because a queued job can
+	outlive a restart (the queue is persisted), and its queue time is measured
+	from when it was first admitted, not from when the restart let it resume."""
+	return job_results_dir(job_id) / ".run_admitted"
+
+
 def job_run_started_path(job_id: str) -> Path:
 	"""Epoch timestamp written when the pipeline process starts."""
 	return job_results_dir(job_id) / ".run_started"
