@@ -95,6 +95,14 @@ class JobStore:
 			print(f"[uploads] could not record upload for job {job_id}: {exception}")
 		return upload_entry
 
+	def read_run_admitted(self, job_id):
+		"""When this job was admitted to run -- when its wait for a slot began -- or
+		None if that was never recorded."""
+		try:
+			return float(jobs.job_run_admitted_path(job_id).read_text())
+		except (OSError, ValueError):
+			return None
+
 	def read_run_started(self, job_id):
 		"""When this job's pipeline process started, or None if it never did."""
 		try:
@@ -121,6 +129,7 @@ class JobStore:
 		results_dir.mkdir(parents=True, exist_ok=True)
 		jobs.job_status_path(job_id).unlink(missing_ok=True)
 		jobs.job_first_viewed_path(job_id).unlink(missing_ok=True)
+		jobs.job_run_admitted_path(job_id).unlink(missing_ok=True)
 		jobs.job_run_started_path(job_id).unlink(missing_ok=True)
 
 	def mark_first_viewed(self, job_id):

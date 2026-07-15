@@ -7,6 +7,7 @@ import sys
 import io
 import logging
 import hashlib
+import re
 import time
 import functools
 import zipfile
@@ -16,6 +17,30 @@ import json
 
 
 # Logging Setup
+
+# A BV-BRC remote path embeds the account name and the app directory it writes
+# into: /kenneth@bvbrc/home/bioinformatics_analysis/reads/X.fastq.gz. Job logs
+# are downloadable from the results page, so neither belongs in them — keep the
+# part below the app directory, which is what's actually useful when reading a
+# log, and drop the prefix.
+_REMOTE_WORKSPACE_PATH = re.compile(r"/[^/\s'\"]+@[^/\s'\"]+/home/[^/\s'\"]+")
+
+
+class _RedactWorkspacePaths(logging.Filter):
+    """Strip the account/app-directory prefix out of every record, including the
+    server-supplied text in RPC errors and tracebacks. This sits on the logger
+    rather than at the call sites so a new log line can't reintroduce the leak."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if isinstance(record.msg, str):
+            record.msg = _REMOTE_WORKSPACE_PATH.sub("<workspace>", record.msg)
+        if record.args:
+            record.args = tuple(
+                _REMOTE_WORKSPACE_PATH.sub("<workspace>", arg) if isinstance(arg, str) else arg
+                for arg in record.args
+            )
+        return True
+
 
 def setup_logger(logger_name: str, log_file: Optional[str] = None, level=logging.INFO) -> logging.Logger:
     """
@@ -31,6 +56,9 @@ def setup_logger(logger_name: str, log_file: Optional[str] = None, level=logging
     """
     logger = logging.getLogger(logger_name)
     logger.setLevel(level)
+
+    if not any(isinstance(existing, _RedactWorkspacePaths) for existing in logger.filters):
+        logger.addFilter(_RedactWorkspacePaths())
 
     formatter = logging.Formatter(
         '%(asctime)s - %(name)s - %(levelname)s - %(message)s',
