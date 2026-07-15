@@ -1,0 +1,636 @@
+Config file config/config.yaml is extended by additional config specified via the command line.
+Assuming unrestricted shared filesystem usage.
+
+SNAKEMAKE
+=========
+  Date: 2026-07-14 13:53:12
+  Workflow ID: bbd94e0a-5cfa-4f33-a2a5-f407a50b0fed
+  Platform: Linux-7.0.0-1008-aws-x86_64-with-glibc2.31
+  Host: 4d1388f051b7
+  User: root
+  Snakemake version: 9.23.1
+  Python version: 3.11.15 | packaged by conda-forge | (main, Jun 11 2026, 03:34:02) [GCC 14.3.0]
+  Command: /opt/conda/envs/bioinformatics/bin/snakemake --cores 28 --default-resources cpu=1 --resources cpu=8 bvbrc=12 uploads=4 --use-conda --rerun-incomplete --rerun-triggers mtime --nolock --config job_id=3TNCC7UTX9ES results_dir=results/3TNCC7UTX9ES samples_manifest=config/jobs/3TNCC7UTX9ES/samples.csv pipeline_cores=8
+  Snakefile: /app/workflow/Snakefile
+  Base directory: /app/workflow
+  Run directory: /app
+  Working directory: /app
+  Config file(s): ['config/config.yaml']
+  Config MD5: 29d727874d1082fe16c271bc0ff7de36
+
+Building DAG of jobs...
+Your conda installation is not configured to use strict channel priorities. This is however important for having robust and correct environments (for details, see https://conda-forge.org/docs/user/tipsandtricks.html). Please consider to configure strict priorities by executing 'conda config --set channel_priority strict'.
+Using shell: /usr/bin/bash
+Provided cores: 28
+Rules claiming more threads will be scaled down.
+Provided resources: cpu=Resource("cpu", 8), bvbrc=Resource("bvbrc", 12), uploads=Resource("uploads", 4)
+Job stats:
+job                                    count
+-----------------------------------  -------
+fetch_raw_read                             2
+setup_fresh_databases                      1
+bvbrc_upload_reads                         1
+validate_fastq                             1
+bvbrc_similar_genome_finder                1
+bvbrc_comprehensive_genome_analysis        1
+card_rgi_analysis                          1
+mlst_analysis                              1
+mobile_element_finder                      1
+parse_genome_report                        1
+blast_ncbi_novelty                         1
+evaluate_novelty                           1
+extract_rgi_proteins                       1
+mobile_element_colocation                  1
+mobile_element_summary                     1
+generate_master_report                     1
+generate_sample_report                     1
+all                                        1
+total                                     19
+
+Select jobs to execute...
+Execute 3 jobs...
+
+[Tue Jul 14 13:53:13 2026]
+localrule fetch_raw_read:
+    output: data/raw_fastq/3TNCC7UTX9ES/SW4E1_S337_R1_001.fastq.gz
+    log: results/3TNCC7UTX9ES/logs/fetch_3TNCC7UTX9ES_SW4E1_S337_R1_001.fastq.gz.log
+    jobid: 2
+    reason: Missing output files: data/raw_fastq/3TNCC7UTX9ES/SW4E1_S337_R1_001.fastq.gz
+    wildcards: job=3TNCC7UTX9ES, filename=SW4E1_S337_R1_001.fastq.gz
+    resources: tmpdir=/tmp, mem_mb=1000, mem=1 GB, mem_mib=954, disk_mb=50000, disk=50 GB, disk_mib=47684, cpu=0
+[Tue Jul 14 13:53:13 2026]
+localrule fetch_raw_read:
+    output: data/raw_fastq/3TNCC7UTX9ES/SW4E1_S337_R2_001.fastq.gz
+    log: results/3TNCC7UTX9ES/logs/fetch_3TNCC7UTX9ES_SW4E1_S337_R2_001.fastq.gz.log
+    jobid: 3
+    reason: Missing output files: data/raw_fastq/3TNCC7UTX9ES/SW4E1_S337_R2_001.fastq.gz
+    wildcards: job=3TNCC7UTX9ES, filename=SW4E1_S337_R2_001.fastq.gz
+    resources: tmpdir=/tmp, mem_mb=1000, mem=1 GB, mem_mib=954, disk_mb=50000, disk=50 GB, disk_mib=47684, cpu=0
+[Tue Jul 14 13:53:13 2026]
+localrule setup_fresh_databases:
+    output: results/3TNCC7UTX9ES/.databases_fresh
+    log: results/3TNCC7UTX9ES/logs/setup_fresh_databases.log
+    jobid: 8
+    reason: Missing output files: results/3TNCC7UTX9ES/.databases_fresh
+    resources: tmpdir=/tmp, mem_mb=1000, mem=1 GB, mem_mib=954, disk_mb=50000, disk=50 GB, disk_mib=47684, cpu=1
+Databases updated daily via scheduled job (daily_update_databases.py)
+[Tue Jul 14 13:53:13 2026]
+Finished jobid: 8 (Rule: setup_fresh_databases)
+1 of 19 steps (5%) done
+→ fetch_raw_read: SW4E1_S337_R2_001.fastq.gz → data/raw_fastq/3TNCC7UTX9ES/SW4E1_S337_R2_001.fastq.gz
+✓ fetch_raw_read: SW4E1_S337_R2_001.fastq.gz (208.7 MB)
+→ fetch_raw_read: SW4E1_S337_R1_001.fastq.gz → data/raw_fastq/3TNCC7UTX9ES/SW4E1_S337_R1_001.fastq.gz
+✓ fetch_raw_read: SW4E1_S337_R1_001.fastq.gz (198.0 MB)
+[Tue Jul 14 13:53:14 2026]
+Finished jobid: 3 (Rule: fetch_raw_read)
+2 of 19 steps (11%) done
+[Tue Jul 14 13:53:14 2026]
+Finished jobid: 2 (Rule: fetch_raw_read)
+3 of 19 steps (16%) done
+Select jobs to execute...
+Execute 2 jobs...
+
+[Tue Jul 14 13:53:14 2026]
+localrule bvbrc_upload_reads:
+    input: data/raw_fastq/3TNCC7UTX9ES/SW4E1_S337_R1_001.fastq.gz, data/raw_fastq/3TNCC7UTX9ES/SW4E1_S337_R2_001.fastq.gz
+    output: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/upload.log
+    log: results/3TNCC7UTX9ES/logs/SW4E1_S337_bvbrc_upload.log
+    jobid: 6
+    reason: Missing output files: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/upload.log; Input files updated by another job: data/raw_fastq/3TNCC7UTX9ES/SW4E1_S337_R1_001.fastq.gz, data/raw_fastq/3TNCC7UTX9ES/SW4E1_S337_R2_001.fastq.gz
+    wildcards: sample=SW4E1_S337
+    resources: tmpdir=/tmp, mem_mb=1000, mem=1 GB, mem_mib=954, disk_mb=1000, disk=1 GB, disk_mib=954, cpu=0, uploads=1
+[Tue Jul 14 13:53:14 2026]
+localrule validate_fastq:
+    input: data/raw_fastq/3TNCC7UTX9ES/SW4E1_S337_R1_001.fastq.gz, data/raw_fastq/3TNCC7UTX9ES/SW4E1_S337_R2_001.fastq.gz
+    output: results/3TNCC7UTX9ES/SW4E1_S337/01_raw_qc/validation.txt, results/3TNCC7UTX9ES/SW4E1_S337/01_raw_qc/metadata.json
+    log: results/3TNCC7UTX9ES/logs/SW4E1_S337_validate_fastq.log
+    jobid: 1
+    reason: Missing output files: results/3TNCC7UTX9ES/SW4E1_S337/01_raw_qc/validation.txt; Input files updated by another job: data/raw_fastq/3TNCC7UTX9ES/SW4E1_S337_R1_001.fastq.gz, data/raw_fastq/3TNCC7UTX9ES/SW4E1_S337_R2_001.fastq.gz
+    wildcards: sample=SW4E1_S337
+    resources: tmpdir=/tmp, mem_mb=1000, mem=1 GB, mem_mib=954, disk_mb=1000, disk=1 GB, disk_mib=954, cpu=1
+2026-07-14 13:53:14 - bvbrc_client - INFO - Loaded BV-BRC token for user: <user>@bvbrc
+2026-07-14 13:53:14 - bvbrc_client - INFO - Using workspace: <workspace>
+2026-07-14 13:53:14 - bvbrc_upload - INFO - Using workspace: <workspace>
+2026-07-14 13:53:14 - bvbrc_client - INFO - Uploading data/raw_fastq/3TNCC7UTX9ES/SW4E1_S337_R1_001.fastq.gz (207.6 MB) → <workspace>/reads/SW4E1_S337_R1.fastq.gz
+✓ QC validation complete for SW4E1_S337
+[Tue Jul 14 13:53:15 2026]
+Finished jobid: 1 (Rule: validate_fastq)
+4 of 19 steps (21%) done
+2026-07-14 13:53:15 - bvbrc_client - INFO - Uploading to shock node: https://p3.theseed.org/services/shock_api/node/40a0d5c8-2ba0-4700-9a51-d725a418687e
+2026-07-14 13:53:23 - bvbrc_client - INFO - ✓ Upload complete: <workspace>/reads/SW4E1_S337_R1.fastq.gz
+2026-07-14 13:53:23 - bvbrc_client - INFO - Uploading data/raw_fastq/3TNCC7UTX9ES/SW4E1_S337_R2_001.fastq.gz (218.8 MB) → <workspace>/reads/SW4E1_S337_R2.fastq.gz
+2026-07-14 13:53:23 - bvbrc_client - INFO - Uploading to shock node: https://p3.theseed.org/services/shock_api/node/0d7c9ae8-81db-4b73-9850-70d195fcec3c
+2026-07-14 13:53:31 - bvbrc_client - INFO - ✓ Upload complete: <workspace>/reads/SW4E1_S337_R2.fastq.gz
+2026-07-14 13:53:31 - bvbrc_client - INFO - ✓ Paired reads uploaded for SW4E1_S337
+2026-07-14 13:53:31 - bvbrc_upload - INFO - ✓ Upload complete for SW4E1_S337
+2026-07-14 13:53:31 - bvbrc_upload - INFO -   R1: <workspace>/reads/SW4E1_S337_R1.fastq.gz
+2026-07-14 13:53:31 - bvbrc_upload - INFO -   R2: <workspace>/reads/SW4E1_S337_R2.fastq.gz
+[Tue Jul 14 13:53:31 2026]
+Finished jobid: 6 (Rule: bvbrc_upload_reads)
+5 of 19 steps (26%) done
+Removing temporary output data/raw_fastq/3TNCC7UTX9ES/SW4E1_S337_R1_001.fastq.gz.
+Removing temporary output data/raw_fastq/3TNCC7UTX9ES/SW4E1_S337_R2_001.fastq.gz.
+Select jobs to execute...
+Execute 1 jobs...
+
+[Tue Jul 14 13:53:31 2026]
+localrule bvbrc_similar_genome_finder:
+    input: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/upload.log
+    output: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/genus.txt, results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/taxonomic_classification.txt
+    log: results/3TNCC7UTX9ES/logs/SW4E1_S337_bvbrc_genus.log
+    jobid: 5
+    reason: Missing output files: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/genus.txt; Input files updated by another job: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/upload.log
+    wildcards: sample=SW4E1_S337
+    resources: tmpdir=/tmp, mem_mb=1000, mem=1 GB, mem_mib=954, disk_mb=1000, disk=1 GB, disk_mib=954, cpu=0, bvbrc=1
+2026-07-14 13:53:31 - bvbrc_client - INFO - Loaded BV-BRC token for user: <user>@bvbrc
+2026-07-14 13:53:31 - bvbrc_genus_finder - INFO - Submitting TaxonomicClassification for SW4E1_S337...
+2026-07-14 13:53:31 - bvbrc_client - INFO - Submitting TaxonomicClassification job for SW4E1_S337...
+2026-07-14 13:53:35 - bvbrc_client - INFO - ✓ TaxonomicClassification job submitted: 23012003
+2026-07-14 13:53:35 - bvbrc_genus_finder - INFO - Job submitted: 23012003
+2026-07-14 13:53:35 - bvbrc_client - INFO - Job 23012003 status: in-progress [0s elapsed]
+2026-07-14 13:54:06 - bvbrc_client - INFO - Job 23012003 status: in-progress [30s elapsed]
+2026-07-14 13:54:36 - bvbrc_client - INFO - Job 23012003 status: in-progress [60s elapsed]
+2026-07-14 13:55:06 - bvbrc_client - INFO - Job 23012003 status: in-progress [91s elapsed]
+2026-07-14 13:55:36 - bvbrc_client - INFO - Job 23012003 status: in-progress [121s elapsed]
+2026-07-14 13:56:07 - bvbrc_client - INFO - Job 23012003 status: in-progress [151s elapsed]
+2026-07-14 13:56:37 - bvbrc_client - INFO - Job 23012003 status: in-progress [182s elapsed]
+2026-07-14 13:57:07 - bvbrc_client - INFO - Job 23012003 status: in-progress [212s elapsed]
+2026-07-14 13:57:37 - bvbrc_client - INFO - Job 23012003 status: in-progress [242s elapsed]
+2026-07-14 13:58:07 - bvbrc_client - INFO - Job 23012003 status: in-progress [272s elapsed]
+2026-07-14 13:58:38 - bvbrc_client - INFO - Job 23012003 status: in-progress [302s elapsed]
+2026-07-14 13:59:08 - bvbrc_client - INFO - Job 23012003 status: in-progress [333s elapsed]
+2026-07-14 13:59:38 - bvbrc_client - INFO - ✓ Job 23012003 completed
+2026-07-14 13:59:38 - bvbrc_genus_finder - INFO - TaxonomicClassification complete, downloading report...
+2026-07-14 13:59:38 - bvbrc_client - INFO - Downloading <workspace>/taxclass_SW4E1_S337/TaxonomicClassification.txt → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/taxonomic_classification.txt...
+2026-07-14 13:59:38 - bvbrc_client - ERROR - Download failed: 500 Server Error: Internal Server Error for url: https://p3.theseed.org/services/Workspace
+2026-07-14 13:59:38 - bvbrc_genus_finder - WARNING - Could not download Kraken2 report, using Unknown genus
+2026-07-14 13:59:38 - bvbrc_genus_finder - INFO - ✓ Genus identification complete: Unknown
+[Tue Jul 14 13:59:38 2026]
+Finished jobid: 5 (Rule: bvbrc_similar_genome_finder)
+6 of 19 steps (32%) done
+Select jobs to execute...
+Execute 1 jobs...
+
+[Tue Jul 14 13:59:38 2026]
+localrule bvbrc_comprehensive_genome_analysis:
+    input: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/genus.txt, results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/upload.log
+    output: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/assembly_contigs.fasta, results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/genome_report.json, results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/FullGenomeReport.html, results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full, results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/taxonomy_lookup.json
+    log: results/3TNCC7UTX9ES/logs/SW4E1_S337_bvbrc_cga.log
+    jobid: 4
+    reason: Missing output files: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/assembly_contigs.fasta, results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/genome_report.json; Input files updated by another job: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/genus.txt, results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/upload.log
+    wildcards: sample=SW4E1_S337
+    resources: tmpdir=/tmp, mem_mb=1000, mem=1 GB, mem_mib=954, disk_mb=1000, disk=1 GB, disk_mib=954, cpu=0, bvbrc=1
+2026-07-14 13:59:39 - bvbrc_client - INFO - Loaded BV-BRC token for user: <user>@bvbrc
+2026-07-14 13:59:39 - bvbrc_cga - INFO - Submitting Comprehensive Genome Analysis for SW4E1_S337...
+2026-07-14 13:59:39 - bvbrc_cga - INFO - Genus: Unknown (taxon_id: 2)
+2026-07-14 13:59:39 - bvbrc_client - INFO - Submitting Comprehensive Genome Analysis job...
+2026-07-14 13:59:43 - bvbrc_client - INFO - ✓ Comprehensive Genome Analysis job submitted: 23012004
+2026-07-14 13:59:43 - bvbrc_cga - INFO - Job ID: 23012004
+2026-07-14 13:59:43 - bvbrc_client - INFO - Job 23012004 status: in-progress [0s elapsed]
+2026-07-14 14:00:13 - bvbrc_client - INFO - Job 23012004 status: in-progress [30s elapsed]
+2026-07-14 14:00:44 - bvbrc_client - INFO - Job 23012004 status: in-progress [60s elapsed]
+2026-07-14 14:01:14 - bvbrc_client - INFO - Job 23012004 status: in-progress [91s elapsed]
+2026-07-14 14:01:44 - bvbrc_client - INFO - Job 23012004 status: in-progress [121s elapsed]
+2026-07-14 14:02:14 - bvbrc_client - INFO - Job 23012004 status: in-progress [151s elapsed]
+2026-07-14 14:02:45 - bvbrc_client - INFO - Job 23012004 status: in-progress [181s elapsed]
+2026-07-14 14:03:15 - bvbrc_client - INFO - Job 23012004 status: in-progress [212s elapsed]
+2026-07-14 14:03:45 - bvbrc_client - INFO - Job 23012004 status: in-progress [242s elapsed]
+2026-07-14 14:04:15 - bvbrc_client - INFO - Job 23012004 status: in-progress [272s elapsed]
+2026-07-14 14:04:46 - bvbrc_client - INFO - Job 23012004 status: in-progress [302s elapsed]
+2026-07-14 14:05:16 - bvbrc_client - INFO - Job 23012004 status: in-progress [333s elapsed]
+2026-07-14 14:05:46 - bvbrc_client - INFO - Job 23012004 status: in-progress [363s elapsed]
+2026-07-14 14:06:16 - bvbrc_client - INFO - Job 23012004 status: in-progress [393s elapsed]
+2026-07-14 14:06:47 - bvbrc_client - INFO - Job 23012004 status: in-progress [424s elapsed]
+2026-07-14 14:07:17 - bvbrc_client - INFO - Job 23012004 status: in-progress [454s elapsed]
+2026-07-14 14:07:47 - bvbrc_client - INFO - Job 23012004 status: in-progress [484s elapsed]
+2026-07-14 14:08:18 - bvbrc_client - INFO - Job 23012004 status: in-progress [514s elapsed]
+2026-07-14 14:08:48 - bvbrc_client - INFO - Job 23012004 status: in-progress [545s elapsed]
+2026-07-14 14:09:18 - bvbrc_client - INFO - Job 23012004 status: in-progress [575s elapsed]
+2026-07-14 14:09:49 - bvbrc_client - INFO - Job 23012004 status: in-progress [605s elapsed]
+2026-07-14 14:10:19 - bvbrc_client - INFO - Job 23012004 status: in-progress [636s elapsed]
+2026-07-14 14:10:49 - bvbrc_client - INFO - Job 23012004 status: in-progress [666s elapsed]
+2026-07-14 14:11:20 - bvbrc_client - INFO - Job 23012004 status: in-progress [696s elapsed]
+2026-07-14 14:11:50 - bvbrc_client - INFO - Job 23012004 status: in-progress [727s elapsed]
+2026-07-14 14:12:20 - bvbrc_client - INFO - Job 23012004 status: in-progress [757s elapsed]
+2026-07-14 14:12:50 - bvbrc_client - INFO - Job 23012004 status: in-progress [787s elapsed]
+2026-07-14 14:13:21 - bvbrc_client - INFO - Job 23012004 status: in-progress [817s elapsed]
+2026-07-14 14:13:51 - bvbrc_client - INFO - Job 23012004 status: in-progress [848s elapsed]
+2026-07-14 14:14:21 - bvbrc_client - INFO - Job 23012004 status: in-progress [878s elapsed]
+2026-07-14 14:14:51 - bvbrc_client - INFO - Job 23012004 status: in-progress [908s elapsed]
+2026-07-14 14:15:22 - bvbrc_client - INFO - Job 23012004 status: in-progress [938s elapsed]
+2026-07-14 14:15:52 - bvbrc_client - INFO - Job 23012004 status: in-progress [969s elapsed]
+2026-07-14 14:16:22 - bvbrc_client - INFO - Job 23012004 status: in-progress [999s elapsed]
+2026-07-14 14:16:53 - bvbrc_client - INFO - Job 23012004 status: in-progress [1029s elapsed]
+2026-07-14 14:17:23 - bvbrc_client - INFO - Job 23012004 status: in-progress [1060s elapsed]
+2026-07-14 14:17:53 - bvbrc_client - INFO - Job 23012004 status: in-progress [1090s elapsed]
+2026-07-14 14:18:23 - bvbrc_client - INFO - Job 23012004 status: in-progress [1120s elapsed]
+2026-07-14 14:18:54 - bvbrc_client - INFO - Job 23012004 status: in-progress [1151s elapsed]
+2026-07-14 14:19:24 - bvbrc_client - INFO - Job 23012004 status: in-progress [1181s elapsed]
+2026-07-14 14:19:54 - bvbrc_client - INFO - Job 23012004 status: in-progress [1211s elapsed]
+2026-07-14 14:20:24 - bvbrc_client - INFO - Job 23012004 status: in-progress [1241s elapsed]
+2026-07-14 14:20:55 - bvbrc_client - INFO - Job 23012004 status: in-progress [1272s elapsed]
+2026-07-14 14:21:25 - bvbrc_client - INFO - Job 23012004 status: in-progress [1302s elapsed]
+2026-07-14 14:21:55 - bvbrc_client - INFO - Job 23012004 status: in-progress [1332s elapsed]
+2026-07-14 14:22:26 - bvbrc_client - INFO - Job 23012004 status: in-progress [1362s elapsed]
+2026-07-14 14:22:56 - bvbrc_client - INFO - Job 23012004 status: in-progress [1393s elapsed]
+2026-07-14 14:23:26 - bvbrc_client - INFO - Job 23012004 status: in-progress [1423s elapsed]
+2026-07-14 14:23:56 - bvbrc_client - INFO - Job 23012004 status: in-progress [1453s elapsed]
+2026-07-14 14:24:27 - bvbrc_client - INFO - Job 23012004 status: in-progress [1484s elapsed]
+2026-07-14 14:24:57 - bvbrc_client - INFO - ✓ Job 23012004 completed
+2026-07-14 14:24:57 - bvbrc_cga - INFO - Comprehensive Genome Analysis complete
+2026-07-14 14:24:57 - bvbrc_cga - INFO - Locating CGA results under ['<workspace>/cga_SW4E1_S337', '<workspace>/.cga_SW4E1_S337']...
+2026-07-14 14:24:59 - bvbrc_cga - INFO - Downloading assembly: <workspace>/.cga_SW4E1_S337/.assembly/assembly_contigs.fasta
+2026-07-14 14:24:59 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.assembly/assembly_contigs.fasta → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/assembly_contigs.fasta...
+2026-07-14 14:24:59 - bvbrc_client - INFO - Workspace.get result: [[[['assembly_contigs.fasta', 'contigs', '<workspace>/.cga_SW4E1_S337/.assembly/', '2026-07-14T14:20:18Z', '241FA844-7F8F-11F1-8847-A4E24E717DE7', '<user>@bvbrc', 5070618, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/f23a373e-64e1-4ba8-bb33-708eccab46f8'], 'https://p3.theseed.org/services/shock_api/node/f23a373e-64e1-4ba8-bb33-708eccab46f8']]]
+2026-07-14 14:24:59 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/f23a373e-64e1-4ba8-bb33-708eccab46f8
+2026-07-14 14:25:00 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/assembly_contigs.fasta (5.1 MB)
+2026-07-14 14:25:00 - bvbrc_cga - INFO - Downloading genome report: <workspace>/.cga_SW4E1_S337/.annotation/load_files/genome.json
+2026-07-14 14:25:00 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/load_files/genome.json → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/genome_report.json...
+2026-07-14 14:25:01 - bvbrc_client - INFO - Workspace.get result: [[[['genome.json', 'json', '<workspace>/.cga_SW4E1_S337/.annotation/load_files/', '2026-07-14T14:21:39Z', '542664B0-7F8F-11F1-A1CB-8AEF4E717DE7', '<user>@bvbrc', 1152, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/abae1b4d-b10a-4832-b637-bba8ee317f70'], 'https://p3.theseed.org/services/shock_api/node/abae1b4d-b10a-4832-b637-bba8ee317f70']]]
+2026-07-14 14:25:01 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/abae1b4d-b10a-4832-b637-bba8ee317f70
+2026-07-14 14:25:01 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/genome_report.json (0.0 MB)
+2026-07-14 14:25:01 - bvbrc_cga - INFO - Downloading HTML report: <workspace>/.cga_SW4E1_S337/FullGenomeReport.html
+2026-07-14 14:25:01 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/FullGenomeReport.html → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/FullGenomeReport.html...
+2026-07-14 14:25:01 - bvbrc_client - INFO - Workspace.get result: [[[['FullGenomeReport.html', 'html', '<workspace>/.cga_SW4E1_S337/', '2026-07-14T14:24:31Z', 'BAD29C10-7F8F-11F1-9BC6-30E84E717DE7', '<user>@bvbrc', 1764419, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/7db12782-c07a-4c8e-9361-46638dac76ea'], 'https://p3.theseed.org/services/shock_api/node/7db12782-c07a-4c8e-9361-46638dac76ea']]]
+2026-07-14 14:25:01 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/7db12782-c07a-4c8e-9361-46638dac76ea
+2026-07-14 14:25:02 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/FullGenomeReport.html (1.8 MB)
+2026-07-14 14:25:02 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/FullGenomeReport.html → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/FullGenomeReport.html...
+2026-07-14 14:25:02 - bvbrc_client - INFO - Workspace.get result: [[[['FullGenomeReport.html', 'html', '<workspace>/.cga_SW4E1_S337/', '2026-07-14T14:24:31Z', 'BAD29C10-7F8F-11F1-9BC6-30E84E717DE7', '<user>@bvbrc', 1764419, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/7db12782-c07a-4c8e-9361-46638dac76ea'], 'https://p3.theseed.org/services/shock_api/node/7db12782-c07a-4c8e-9361-46638dac76ea']]]
+2026-07-14 14:25:02 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/7db12782-c07a-4c8e-9361-46638dac76ea
+2026-07-14 14:25:03 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/FullGenomeReport.html (1.8 MB)
+2026-07-14 14:25:03 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/annotated.genome → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/annotated.genome...
+2026-07-14 14:25:03 - bvbrc_client - INFO - Workspace.get result: [[[['annotated.genome', 'genome', '<workspace>/.cga_SW4E1_S337/', '2026-07-14T14:24:31Z', 'BAF89988-7F8F-11F1-9709-040F4F717DE7', '<user>@bvbrc', 16754693, {}, {'gc_content': 55.035774212846, 'domain': 'Bacteria', 'N70': 736428, 'genome_id': '2.114540', 'scientific_name': 'Bacteria', 'num_features': 4788, 'is_folder': 0, 'num_contigs': 16, 'N50': 2821155, 'ncbi_taxonomy_id': '2', 'taxonomy': None, 'per_contig_gc_content': {'assembly_contig_7': 55.0237341772152, 'assembly_contig_3': 54.4841433773021, 'assembly_contig_8': 55.7542080173554, 'assembly_contig_12': 53.3100811590315, 'assembly_contig_2': 55.2385297680153, 'assembly_contig_10': 54.5854859401546, 'assembly_contig_16': 66.7994687915007, 'assembly_contig_4': 55.0094622408244, 'assembly_contig_9': 55.3925505747703, 'assembly_contig_15': 52.463768115942, 'assembly_contig_5': 56.8335879018922, 'assembly_contig_6': 55.4096287433867, 'assembly_contig_1': 54.884258397713, 'assembly_contig_14': 53.3495736906212, 'assembly_contig_13': 53.4372785258682, 'assembly_contig_11': 50.645508337816}, 'N90': 219821, 'dna_size': 4986413}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/ce3272b6-6f28-483b-a4d5-73e7934f83d2'], 'https://p3.theseed.org/services/shock_api/node/ce3272b6-6f28-483b-a4d5-73e7934f83d2']]]
+2026-07-14 14:25:03 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/ce3272b6-6f28-483b-a4d5-73e7934f83d2
+2026-07-14 14:25:05 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/annotated.genome (16.8 MB)
+2026-07-14 14:25:05 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/circos.svg → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/circos.svg...
+2026-07-14 14:25:05 - bvbrc_client - INFO - Workspace.get result: [[[['circos.svg', 'svg', '<workspace>/.cga_SW4E1_S337/', '2026-07-14T14:24:39Z', 'BF85BBD4-7F8F-11F1-B3C5-58084F717DE7', '<user>@bvbrc', 1734798, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/1977fd39-512f-4827-84ee-ecf7bd948379'], 'https://p3.theseed.org/services/shock_api/node/1977fd39-512f-4827-84ee-ecf7bd948379']]]
+2026-07-14 14:25:05 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/1977fd39-512f-4827-84ee-ecf7bd948379
+2026-07-14 14:25:06 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/circos.svg (1.7 MB)
+2026-07-14 14:25:06 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/circos.png → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/circos.png...
+2026-07-14 14:25:06 - bvbrc_client - INFO - Workspace.get result: [[[['circos.png', 'png', '<workspace>/.cga_SW4E1_S337/', '2026-07-14T14:24:39Z', 'BFA6FC5E-7F8F-11F1-81EC-9E034F717DE7', '<user>@bvbrc', 1819418, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/8bf9157c-bb4e-42ed-a864-431c130f0617'], 'https://p3.theseed.org/services/shock_api/node/8bf9157c-bb4e-42ed-a864-431c130f0617']]]
+2026-07-14 14:25:06 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/8bf9157c-bb4e-42ed-a864-431c130f0617
+2026-07-14 14:25:07 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/circos.png (1.8 MB)
+2026-07-14 14:25:07 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/subsystem_colors.json → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/subsystem_colors.json...
+2026-07-14 14:25:07 - bvbrc_client - INFO - Workspace.get result: [[[['subsystem_colors.json', 'json', '<workspace>/.cga_SW4E1_S337/', '2026-07-14T14:24:40Z', 'BFCE5BAA-7F8F-11F1-A4AB-EF024F717DE7', '<user>@bvbrc', 400, {}, {'is_folder': 0}, 'o', 'n', ''], '{\n   "CELL ENVELOPE" : "#7f7f7f",\n   "STRESS RESPONSE, DEFENSE, VIRULENCE" : "#d62728",\n   "MEMBRANE TRANSPORT" : "#9467bd",\n   "DNA PROCESSING" : "#e377c2",\n   "MISCELLANEOUS" : "#bcbd22",\n   "PROTEIN PROCESSING" : "#2ca02c",\n   "ENERGY" : "#ff7f0e",\n   "RNA PROCESSING" : "#17becf",\n   "CELLULAR PROCESSES" : "#8c564b",\n   "REGULATION AND CELL SIGNALING" : "#aec7e8",\n   "METABOLISM" : "#1f77b4"\n}\n']]]
+2026-07-14 14:25:07 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/subsystem_colors.json (0.0 MB)
+2026-07-14 14:25:07 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/codonTree.svg → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/codonTree.svg...
+2026-07-14 14:25:08 - bvbrc_client - INFO - Workspace.get result: [[[['codonTree.svg', 'svg', '<workspace>/.cga_SW4E1_S337/', '2026-07-14T14:24:40Z', 'BFD310AA-7F8F-11F1-8A47-4AD44E717DE7', '<user>@bvbrc', 8131, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/5f26a8f6-3753-4979-a318-4187049394c7'], 'https://p3.theseed.org/services/shock_api/node/5f26a8f6-3753-4979-a318-4187049394c7']]]
+2026-07-14 14:25:08 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/5f26a8f6-3753-4979-a318-4187049394c7
+2026-07-14 14:25:08 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/codonTree.svg (0.0 MB)
+2026-07-14 14:25:08 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/tree_ingroup.txt → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/tree_ingroup.txt...
+2026-07-14 14:25:08 - bvbrc_client - INFO - Workspace.get result: [[[['tree_ingroup.txt', 'txt', '<workspace>/.cga_SW4E1_S337/', '2026-07-14T14:24:40Z', 'BFF2E042-7F8F-11F1-B21D-97084F717DE7', '<user>@bvbrc', 94, {}, {'is_folder': 0}, 'o', 'n', ''], '716541.4\n980518.3\n888063.3\n500639.8\n640513.3\n1504156.3\n399742.10\n1002368.3\n1028307.3\n701347.4\n']]]
+2026-07-14 14:25:08 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/tree_ingroup.txt (0.0 MB)
+2026-07-14 14:25:08 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/codontree.nex → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/codontree.nex...
+2026-07-14 14:25:08 - bvbrc_client - INFO - Workspace.get result: [[[['codontree.nex', 'txt', '<workspace>/.cga_SW4E1_S337/', '2026-07-14T14:24:40Z', 'BFF83E7A-7F8F-11F1-900B-27D74E717DE7', '<user>@bvbrc', 2238, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/31e3b63e-b85b-4e32-9860-7df9fc615893'], 'https://p3.theseed.org/services/shock_api/node/31e3b63e-b85b-4e32-9860-7df9fc615893']]]
+2026-07-14 14:25:08 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/31e3b63e-b85b-4e32-9860-7df9fc615893
+2026-07-14 14:25:09 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/codontree.nex (0.0 MB)
+2026-07-14 14:25:09 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/codontree.genesPerGenome.txt → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/codontree.genesPerGenome.txt...
+2026-07-14 14:25:09 - bvbrc_client - INFO - Workspace.get result: [[[['codontree.genesPerGenome.txt', 'txt', '<workspace>/.cga_SW4E1_S337/', '2026-07-14T14:24:40Z', 'C017A3AA-7F8F-11F1-BBBA-D0104F717DE7', '<user>@bvbrc', 282, {}, {'is_folder': 0}, 'o', 'n', ''], 'Genome\tAllGenes\tSingleCopy\tFiltered_SingleCopy\n1002368.3\t3649\t2140\t5\n500639.8\t3800\t2216\t5\n399742.10\t3886\t2158\t5\n980518.3\t3937\t2116\t5\n888063.3\t3980\t2184\t5\n2.114540\t4030\t2222\t5\n640513.3\t4077\t2207\t5\n701347.4\t4099\t2144\t5\n1504156.3\t4142\t1166\t5\n1028307.3\t4300\t2143\t5\n716541.4\t4386\t2219\t5\n']]]
+2026-07-14 14:25:09 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/codontree.genesPerGenome.txt (0.0 MB)
+2026-07-14 14:25:09 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/codontree.homologAlignmentStats.txt → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/codontree.homologAlignmentStats.txt...
+2026-07-14 14:25:09 - bvbrc_client - INFO - Workspace.get result: [[[['codontree.homologAlignmentStats.txt', 'txt', '<workspace>/.cga_SW4E1_S337/', '2026-07-14T14:24:40Z', 'C01D2212-7F8F-11F1-BCFC-98124F717DE7', '<user>@bvbrc', 3242, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/06435d8d-0e4a-49cc-a465-2a727759998e'], 'https://p3.theseed.org/services/shock_api/node/06435d8d-0e4a-49cc-a465-2a727759998e']]]
+2026-07-14 14:25:09 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/06435d8d-0e4a-49cc-a465-2a727759998e
+2026-07-14 14:25:09 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/codontree.homologAlignmentStats.txt (0.0 MB)
+2026-07-14 14:25:09 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/codontree.homologsAndGenesIncludedInAlignment.txt → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/codontree.homologsAndGenesIncludedInAlignment.txt...
+2026-07-14 14:25:10 - bvbrc_client - INFO - Workspace.get result: [[[['codontree.homologsAndGenesIncludedInAlignment.txt', 'txt', '<workspace>/.cga_SW4E1_S337/', '2026-07-14T14:24:40Z', 'C052A900-7F8F-11F1-8472-F80F4F717DE7', '<user>@bvbrc', 2639, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/a7e6dfb8-f06a-485c-baaa-afda0eedd9cf'], 'https://p3.theseed.org/services/shock_api/node/a7e6dfb8-f06a-485c-baaa-afda0eedd9cf']]]
+2026-07-14 14:25:10 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/a7e6dfb8-f06a-485c-baaa-afda0eedd9cf
+2026-07-14 14:25:10 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/codontree.homologsAndGenesIncludedInAlignment.txt (0.0 MB)
+2026-07-14 14:25:10 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/codontree_tree.nwk → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/codontree_tree.nwk...
+2026-07-14 14:25:10 - bvbrc_client - INFO - Workspace.get result: [[[['codontree_tree.nwk', 'nwk', '<workspace>/.cga_SW4E1_S337/', '2026-07-14T14:24:41Z', 'C06CB9E4-7F8F-11F1-8147-30E84E717DE7', '<user>@bvbrc', 575, {}, {'is_folder': 0}, 'o', 'n', ''], '(((2.114540:0.02901851206278579023,716541.4:0.04305933264736250266)100:0.07175591631187420993,(980518.3:0.07213611724857489638,(1504156.3:34.53877639491068407551,888063.3:0.01996693542691340903)1:0.07707023922255658299)7:0.01565787739097037126)15:0.01935057600503267000,(640513.3:0.12667499909843193961,(399742.10:0.22522103277329080795,(1002368.3:0.28407314547327217058,(1028307.3:0.27486832915549869183,701347.4:0.27917122706341307437)43:0.05889432261618328390)31:0.08342085336061175194)31:0.04840825351456746334)31:0.03121204328804286568,500639.8:0.12860803571385664990);\n']]]
+2026-07-14 14:25:10 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/codontree_tree.nwk (0.0 MB)
+2026-07-14 14:25:10 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.assembly/p3x-assembly.stderr → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.assembly/p3x-assembly.stderr...
+2026-07-14 14:25:10 - bvbrc_client - INFO - Workspace.get result: [[[['p3x-assembly.stderr', 'txt', '<workspace>/.cga_SW4E1_S337/.assembly/', '2026-07-14T14:20:17Z', '236E7394-7F8F-11F1-BD42-D0104F717DE7', '<user>@bvbrc', 8192, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/b5b4f357-279f-4290-9691-725839825763'], 'https://p3.theseed.org/services/shock_api/node/b5b4f357-279f-4290-9691-725839825763']]]
+2026-07-14 14:25:10 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/b5b4f357-279f-4290-9691-725839825763
+2026-07-14 14:25:11 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.assembly/p3x-assembly.stderr (0.0 MB)
+2026-07-14 14:25:11 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.assembly/assembly_contigs.fasta → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.assembly/assembly_contigs.fasta...
+2026-07-14 14:25:11 - bvbrc_client - INFO - Workspace.get result: [[[['assembly_contigs.fasta', 'contigs', '<workspace>/.cga_SW4E1_S337/.assembly/', '2026-07-14T14:20:18Z', '241FA844-7F8F-11F1-8847-A4E24E717DE7', '<user>@bvbrc', 5070618, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/f23a373e-64e1-4ba8-bb33-708eccab46f8'], 'https://p3.theseed.org/services/shock_api/node/f23a373e-64e1-4ba8-bb33-708eccab46f8']]]
+2026-07-14 14:25:11 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/f23a373e-64e1-4ba8-bb33-708eccab46f8
+2026-07-14 14:25:12 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.assembly/assembly_contigs.fasta (5.1 MB)
+2026-07-14 14:25:12 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.assembly/assembly_AssemblyReport.html → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.assembly/assembly_AssemblyReport.html...
+2026-07-14 14:25:13 - bvbrc_client - INFO - Workspace.get result: [[[['assembly_AssemblyReport.html', 'html', '<workspace>/.cga_SW4E1_S337/.assembly/', '2026-07-14T14:20:19Z', '245BE2A0-7F8F-11F1-8720-9E034F717DE7', '<user>@bvbrc', 222644, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/147b5821-7553-4c90-bdde-fbccf3a62104'], 'https://p3.theseed.org/services/shock_api/node/147b5821-7553-4c90-bdde-fbccf3a62104']]]
+2026-07-14 14:25:13 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/147b5821-7553-4c90-bdde-fbccf3a62104
+2026-07-14 14:25:13 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.assembly/assembly_AssemblyReport.html (0.2 MB)
+2026-07-14 14:25:13 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/genome_quality_details.txt → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/genome_quality_details.txt...
+2026-07-14 14:25:13 - bvbrc_client - INFO - Workspace.get result: [[[['genome_quality_details.txt', 'txt', '<workspace>/.cga_SW4E1_S337/.annotation/', '2026-07-14T14:21:17Z', '47638118-7F8F-11F1-BD68-58084F717DE7', '<user>@bvbrc', 44892, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/efdb28db-2ed2-4e0e-bb84-6b2416d2f426'], 'https://p3.theseed.org/services/shock_api/node/efdb28db-2ed2-4e0e-bb84-6b2416d2f426']]]
+2026-07-14 14:25:13 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/efdb28db-2ed2-4e0e-bb84-6b2416d2f426
+2026-07-14 14:25:13 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/genome_quality_details.txt (0.0 MB)
+2026-07-14 14:25:13 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/specialty-amrfinder.txt → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/specialty-amrfinder.txt...
+2026-07-14 14:25:14 - bvbrc_client - INFO - Workspace.get result: [[[['specialty-amrfinder.txt', 'txt', '<workspace>/.cga_SW4E1_S337/.annotation/', '2026-07-14T14:21:18Z', '47BB1D38-7F8F-11F1-A0A0-9E034F717DE7', '<user>@bvbrc', 1091, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/3410da4a-fa9f-474d-a73f-7e637b6d91b6'], 'https://p3.theseed.org/services/shock_api/node/3410da4a-fa9f-474d-a73f-7e637b6d91b6']]]
+2026-07-14 14:25:14 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/3410da4a-fa9f-474d-a73f-7e637b6d91b6
+2026-07-14 14:25:14 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/specialty-amrfinder.txt (0.0 MB)
+2026-07-14 14:25:14 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/specialty-blast.txt → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/specialty-blast.txt...
+2026-07-14 14:25:14 - bvbrc_client - INFO - Workspace.get result: [[[['specialty-blast.txt', 'txt', '<workspace>/.cga_SW4E1_S337/.annotation/', '2026-07-14T14:21:19Z', '481F1C3E-7F8F-11F1-945C-D5ED4E717DE7', '<user>@bvbrc', 59650, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/a10b7878-8f26-4662-ac70-1bdf29231517'], 'https://p3.theseed.org/services/shock_api/node/a10b7878-8f26-4662-ac70-1bdf29231517']]]
+2026-07-14 14:25:14 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/a10b7878-8f26-4662-ac70-1bdf29231517
+2026-07-14 14:25:14 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/specialty-blast.txt (0.1 MB)
+2026-07-14 14:25:14 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/specialty-rgi.json → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/specialty-rgi.json...
+2026-07-14 14:25:15 - bvbrc_client - INFO - Workspace.get result: [[[['specialty-rgi.json', 'unspecified', '<workspace>/.cga_SW4E1_S337/.annotation/', '2026-07-14T14:21:19Z', '4882FAA6-7F8F-11F1-8ED9-97084F717DE7', '<user>@bvbrc', 897594, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/6c039db9-fd17-4cec-9468-a3181efc7c8a'], 'https://p3.theseed.org/services/shock_api/node/6c039db9-fd17-4cec-9468-a3181efc7c8a']]]
+2026-07-14 14:25:15 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/6c039db9-fd17-4cec-9468-a3181efc7c8a
+2026-07-14 14:25:15 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/specialty-rgi.json (0.9 MB)
+2026-07-14 14:25:15 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/specialty-rgi.txt → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/specialty-rgi.txt...
+2026-07-14 14:25:15 - bvbrc_client - INFO - Workspace.get result: [[[['specialty-rgi.txt', 'txt', '<workspace>/.cga_SW4E1_S337/.annotation/', '2026-07-14T14:21:20Z', '48ED6D14-7F8F-11F1-ABAD-040F4F717DE7', '<user>@bvbrc', 45116, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/2b8dd0f9-da52-4919-b347-34cb5f292478'], 'https://p3.theseed.org/services/shock_api/node/2b8dd0f9-da52-4919-b347-34cb5f292478']]]
+2026-07-14 14:25:15 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/2b8dd0f9-da52-4919-b347-34cb5f292478
+2026-07-14 14:25:16 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/specialty-rgi.txt (0.0 MB)
+2026-07-14 14:25:16 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/GenomeReport.html → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/GenomeReport.html...
+2026-07-14 14:25:16 - bvbrc_client - INFO - Workspace.get result: [[[['GenomeReport.html', 'html', '<workspace>/.cga_SW4E1_S337/.annotation/', '2026-07-14T14:21:21Z', '494B758A-7F8F-11F1-8D11-8AEF4E717DE7', '<user>@bvbrc', 22610, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/f899ec90-bc8a-40a5-ba96-63f74ad68ea3'], 'https://p3.theseed.org/services/shock_api/node/f899ec90-bc8a-40a5-ba96-63f74ad68ea3']]]
+2026-07-14 14:25:16 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/f899ec90-bc8a-40a5-ba96-63f74ad68ea3
+2026-07-14 14:25:16 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/GenomeReport.html (0.0 MB)
+2026-07-14 14:25:16 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/specialty-blast-alignments.txt → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/specialty-blast-alignments.txt...
+2026-07-14 14:25:17 - bvbrc_client - INFO - Workspace.get result: [[[['specialty-blast-alignments.txt', 'txt', '<workspace>/.cga_SW4E1_S337/.annotation/', '2026-07-14T14:21:21Z', '49AFADF2-7F8F-11F1-9F44-7AF94E717DE7', '<user>@bvbrc', 3978698, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/e3353d58-705b-4d23-8dcd-4aae027a3e0b'], 'https://p3.theseed.org/services/shock_api/node/e3353d58-705b-4d23-8dcd-4aae027a3e0b']]]
+2026-07-14 14:25:17 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/e3353d58-705b-4d23-8dcd-4aae027a3e0b
+2026-07-14 14:25:18 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/specialty-blast-alignments.txt (4.0 MB)
+2026-07-14 14:25:18 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/annotation.genome → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/annotation.genome...
+2026-07-14 14:25:18 - bvbrc_client - INFO - Workspace.get result: [[[['annotation.genome', 'genome', '<workspace>/.cga_SW4E1_S337/.annotation/', '2026-07-14T14:21:22Z', '4A0F38E4-7F8F-11F1-B7B0-60E04E717DE7', '<user>@bvbrc', 16748270, {}, {'N50': 2821155, 'num_contigs': 16, 'num_features': 4788, 'is_folder': 0, 'per_contig_gc_content': {'assembly_contig_2': 55.2385297680153, 'assembly_contig_10': 54.5854859401546, 'assembly_contig_16': 66.7994687915007, 'assembly_contig_12': 53.3100811590315, 'assembly_contig_8': 55.7542080173554, 'assembly_contig_3': 54.4841433773021, 'assembly_contig_7': 55.0237341772152, 'assembly_contig_11': 50.645508337816, 'assembly_contig_13': 53.4372785258682, 'assembly_contig_15': 52.463768115942, 'assembly_contig_9': 55.3925505747703, 'assembly_contig_5': 56.8335879018922, 'assembly_contig_6': 55.4096287433867, 'assembly_contig_1': 54.884258397713, 'assembly_contig_14': 53.3495736906212, 'assembly_contig_4': 55.0094622408244}, 'taxonomy': None, 'dna_size': 4986413, 'N90': 219821, 'ncbi_taxonomy_id': '2', 'gc_content': 55.035774212846, 'N70': 736428, 'domain': 'Bacteria', 'scientific_name': 'Bacteria', 'genome_id': '2.114540'}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/7478ed02-c589-44ce-9457-d275f878d168'], 'https://p3.theseed.org/services/shock_api/node/7478ed02-c589-44ce-9457-d275f878d168']]]
+2026-07-14 14:25:18 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/7478ed02-c589-44ce-9457-d275f878d168
+2026-07-14 14:25:19 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/annotation.genome (16.7 MB)
+2026-07-14 14:25:19 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/annotation.embl → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/annotation.embl...
+2026-07-14 14:25:20 - bvbrc_client - INFO - Workspace.get result: [[[['annotation.embl', 'embl', '<workspace>/.cga_SW4E1_S337/.annotation/', '2026-07-14T14:21:26Z', '4C914ED6-7F8F-11F1-BF3C-EF024F717DE7', '<user>@bvbrc', 10893458, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/cfe16f08-5a4f-4526-b9f2-8bbbd2cf5d73'], 'https://p3.theseed.org/services/shock_api/node/cfe16f08-5a4f-4526-b9f2-8bbbd2cf5d73']]]
+2026-07-14 14:25:20 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/cfe16f08-5a4f-4526-b9f2-8bbbd2cf5d73
+2026-07-14 14:25:21 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/annotation.embl (10.9 MB)
+2026-07-14 14:25:21 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/annotation.gb → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/annotation.gb...
+2026-07-14 14:25:21 - bvbrc_client - INFO - Workspace.get result: [[[['annotation.gb', 'genbank_file', '<workspace>/.cga_SW4E1_S337/.annotation/', '2026-07-14T14:21:28Z', '4D9D84DE-7F8F-11F1-A53B-F80F4F717DE7', '<user>@bvbrc', 10489617, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/390ec5c1-3c01-48c5-8fb8-a24ad7ee9922'], 'https://p3.theseed.org/services/shock_api/node/390ec5c1-3c01-48c5-8fb8-a24ad7ee9922']]]
+2026-07-14 14:25:21 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/390ec5c1-3c01-48c5-8fb8-a24ad7ee9922
+2026-07-14 14:25:23 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/annotation.gb (10.5 MB)
+2026-07-14 14:25:23 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/annotation.merged.gb → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/annotation.merged.gb...
+2026-07-14 14:25:24 - bvbrc_client - INFO - Workspace.get result: [[[['annotation.merged.gb', 'genbank_file', '<workspace>/.cga_SW4E1_S337/.annotation/', '2026-07-14T14:21:30Z', '4E8E7524-7F8F-11F1-86ED-70CD4E717DE7', '<user>@bvbrc', 10491989, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/57565b27-eba2-43ad-9a69-c72728cbb866'], 'https://p3.theseed.org/services/shock_api/node/57565b27-eba2-43ad-9a69-c72728cbb866']]]
+2026-07-14 14:25:24 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/57565b27-eba2-43ad-9a69-c72728cbb866
+2026-07-14 14:25:25 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/annotation.merged.gb (10.5 MB)
+2026-07-14 14:25:25 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/annotation.features.txt → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/annotation.features.txt...
+2026-07-14 14:25:26 - bvbrc_client - INFO - Workspace.get result: [[[['annotation.features.txt', 'feature_table', '<workspace>/.cga_SW4E1_S337/.annotation/', '2026-07-14T14:21:30Z', '4EF3F282-7F8F-11F1-AD9C-D0104F717DE7', '<user>@bvbrc', 631578, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/d5a403bf-3ea3-40ee-95ca-aa2c394ffb98'], 'https://p3.theseed.org/services/shock_api/node/d5a403bf-3ea3-40ee-95ca-aa2c394ffb98']]]
+2026-07-14 14:25:26 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/d5a403bf-3ea3-40ee-95ca-aa2c394ffb98
+2026-07-14 14:25:26 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/annotation.features.txt (0.6 MB)
+2026-07-14 14:25:26 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/annotation.xls → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/annotation.xls...
+2026-07-14 14:25:26 - bvbrc_client - INFO - Workspace.get result: [[[['annotation.xls', 'xls', '<workspace>/.cga_SW4E1_S337/.annotation/', '2026-07-14T14:21:31Z', '4FB99802-7F8F-11F1-B16D-47104F717DE7', '<user>@bvbrc', 7382528, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/d0f509a1-b5e9-486c-8e9a-5ebc75020efc'], 'https://p3.theseed.org/services/shock_api/node/d0f509a1-b5e9-486c-8e9a-5ebc75020efc']]]
+2026-07-14 14:25:26 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/d0f509a1-b5e9-486c-8e9a-5ebc75020efc
+2026-07-14 14:25:28 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/annotation.xls (7.4 MB)
+2026-07-14 14:25:28 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/annotation.contigs.fasta → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/annotation.contigs.fasta...
+2026-07-14 14:25:28 - bvbrc_client - INFO - Workspace.get result: [[[['annotation.contigs.fasta', 'contigs', '<workspace>/.cga_SW4E1_S337/.annotation/', '2026-07-14T14:21:32Z', '5018A3B0-7F8F-11F1-B5FD-4BEF4E717DE7', '<user>@bvbrc', 5069839, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/f18c5406-d1e4-48bb-b53a-77f4e7f37daa'], 'https://p3.theseed.org/services/shock_api/node/f18c5406-d1e4-48bb-b53a-77f4e7f37daa']]]
+2026-07-14 14:25:28 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/f18c5406-d1e4-48bb-b53a-77f4e7f37daa
+2026-07-14 14:25:30 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/annotation.contigs.fasta (5.1 MB)
+2026-07-14 14:25:30 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/annotation.txt → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/annotation.txt...
+2026-07-14 14:25:30 - bvbrc_client - INFO - Workspace.get result: [[[['annotation.txt', 'tsv', '<workspace>/.cga_SW4E1_S337/.annotation/', '2026-07-14T14:21:33Z', '507A6956-7F8F-11F1-932F-58084F717DE7', '<user>@bvbrc', 6740119, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/39e058d0-402e-4350-b50d-e4ef8a377ef4'], 'https://p3.theseed.org/services/shock_api/node/39e058d0-402e-4350-b50d-e4ef8a377ef4']]]
+2026-07-14 14:25:30 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/39e058d0-402e-4350-b50d-e4ef8a377ef4
+2026-07-14 14:25:31 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/annotation.txt (6.7 MB)
+2026-07-14 14:25:31 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/annotation.gff → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/annotation.gff...
+2026-07-14 14:25:31 - bvbrc_client - INFO - Workspace.get result: [[[['annotation.gff', 'gff', '<workspace>/.cga_SW4E1_S337/.annotation/', '2026-07-14T14:21:34Z', '5118B3AE-7F8F-11F1-AD1A-7AF94E717DE7', '<user>@bvbrc', 663303, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/4ad04c50-7fd2-4dbb-97ca-1d15cab3ea44'], 'https://p3.theseed.org/services/shock_api/node/4ad04c50-7fd2-4dbb-97ca-1d15cab3ea44']]]
+2026-07-14 14:25:31 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/4ad04c50-7fd2-4dbb-97ca-1d15cab3ea44
+2026-07-14 14:25:32 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/annotation.gff (0.7 MB)
+2026-07-14 14:25:32 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/annotation.tar.gz → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/annotation.tar.gz...
+2026-07-14 14:25:32 - bvbrc_client - INFO - Workspace.get result: [[[['annotation.tar.gz', 'tar_gz', '<workspace>/.cga_SW4E1_S337/.annotation/', '2026-07-14T14:21:36Z', '526F47AE-7F8F-11F1-8752-D5ED4E717DE7', '<user>@bvbrc', 2787155, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/f9564294-5e42-4544-8d26-fcf8e6da220c'], 'https://p3.theseed.org/services/shock_api/node/f9564294-5e42-4544-8d26-fcf8e6da220c']]]
+2026-07-14 14:25:32 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/f9564294-5e42-4544-8d26-fcf8e6da220c
+2026-07-14 14:25:34 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/annotation.tar.gz (2.8 MB)
+2026-07-14 14:25:34 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/annotation.feature_protein.fasta → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/annotation.feature_protein.fasta...
+2026-07-14 14:25:34 - bvbrc_client - INFO - Workspace.get result: [[[['annotation.feature_protein.fasta', 'feature_protein_fasta', '<workspace>/.cga_SW4E1_S337/.annotation/', '2026-07-14T14:21:37Z', '52CC4C6A-7F8F-11F1-AFC2-60E04E717DE7', '<user>@bvbrc', 1941513, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/47b55255-79a2-43fb-ab8f-ca1158b474a1'], 'https://p3.theseed.org/services/shock_api/node/47b55255-79a2-43fb-ab8f-ca1158b474a1']]]
+2026-07-14 14:25:34 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/47b55255-79a2-43fb-ab8f-ca1158b474a1
+2026-07-14 14:25:35 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/annotation.feature_protein.fasta (1.9 MB)
+2026-07-14 14:25:35 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/annotation.feature_dna.fasta → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/annotation.feature_dna.fasta...
+2026-07-14 14:25:35 - bvbrc_client - INFO - Workspace.get result: [[[['annotation.feature_dna.fasta', 'feature_dna_fasta', '<workspace>/.cga_SW4E1_S337/.annotation/', '2026-07-14T14:21:37Z', '53181D52-7F8F-11F1-BC9E-F80F4F717DE7', '<user>@bvbrc', 5016339, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/6141a37f-c403-4d98-9706-4ba898681445'], 'https://p3.theseed.org/services/shock_api/node/6141a37f-c403-4d98-9706-4ba898681445']]]
+2026-07-14 14:25:35 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/6141a37f-c403-4d98-9706-4ba898681445
+2026-07-14 14:25:37 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/annotation.feature_dna.fasta (5.0 MB)
+2026-07-14 14:25:37 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/quality.json → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/quality.json...
+2026-07-14 14:25:37 - bvbrc_client - INFO - Workspace.get result: [[[['quality.json', 'json', '<workspace>/.cga_SW4E1_S337/.annotation/', '2026-07-14T14:21:41Z', '55AE9C08-7F8F-11F1-9ABE-27D74E717DE7', '<user>@bvbrc', 447385, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/5b6c4d8d-ae05-49bb-b0a3-e38cfd41197b'], 'https://p3.theseed.org/services/shock_api/node/5b6c4d8d-ae05-49bb-b0a3-e38cfd41197b']]]
+2026-07-14 14:25:37 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/5b6c4d8d-ae05-49bb-b0a3-e38cfd41197b
+2026-07-14 14:25:37 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/quality.json (0.4 MB)
+2026-07-14 14:25:37 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.assembly/details/assembly_unicycler.log → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.assembly/details/assembly_unicycler.log...
+2026-07-14 14:25:38 - bvbrc_client - INFO - Workspace.get result: [[[['assembly_unicycler.log', 'txt', '<workspace>/.cga_SW4E1_S337/.assembly/details/', '2026-07-14T14:20:17Z', '2393A204-7F8F-11F1-9D04-47104F717DE7', '<user>@bvbrc', 9526, {'original_path': '/tmp/rRnRGop4Ce/assembly/p3_assembly_work/save/details/assembly_unicycler.log'}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/0b0b09b7-6331-4069-a815-ddcb19d69988'], 'https://p3.theseed.org/services/shock_api/node/0b0b09b7-6331-4069-a815-ddcb19d69988']]]
+2026-07-14 14:25:38 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/0b0b09b7-6331-4069-a815-ddcb19d69988
+2026-07-14 14:25:38 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.assembly/details/assembly_unicycler.log (0.0 MB)
+2026-07-14 14:25:38 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.assembly/details/assembly_assembly_graph.gfa → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.assembly/details/assembly_assembly_graph.gfa...
+2026-07-14 14:25:38 - bvbrc_client - INFO - Workspace.get result: [[[['assembly_assembly_graph.gfa', 'txt', '<workspace>/.cga_SW4E1_S337/.assembly/details/', '2026-07-14T14:20:18Z', '23B35284-7F8F-11F1-8340-8AEF4E717DE7', '<user>@bvbrc', 4995057, {'original_path': '/tmp/rRnRGop4Ce/assembly/p3_assembly_work/save/details/assembly_assembly_graph.gfa'}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/6f397770-e4e0-4ad3-86cb-781f2e58263b'], 'https://p3.theseed.org/services/shock_api/node/6f397770-e4e0-4ad3-86cb-781f2e58263b']]]
+2026-07-14 14:25:38 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/6f397770-e4e0-4ad3-86cb-781f2e58263b
+2026-07-14 14:25:39 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.assembly/details/assembly_assembly_graph.gfa (5.0 MB)
+2026-07-14 14:25:39 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.assembly/details/contigs_below_length_coverage_threshold.fasta → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.assembly/details/contigs_below_length_coverage_threshold.fasta...
+2026-07-14 14:25:40 - bvbrc_client - INFO - Workspace.get result: [[[['contigs_below_length_coverage_threshold.fasta', 'contigs', '<workspace>/.cga_SW4E1_S337/.assembly/details/', '2026-07-14T14:20:18Z', '23EADA7E-7F8F-11F1-A5B4-53084F717DE7', '<user>@bvbrc', 0, {'original_path': '/tmp/rRnRGop4Ce/assembly/p3_assembly_work/save/details/contigs_below_length_coverage_threshold.fasta'}, {'is_folder': 0}, 'o', 'n', ''], '']]]
+2026-07-14 14:25:40 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.assembly/details/contigs_below_length_coverage_threshold.fasta (0.0 MB)
+2026-07-14 14:25:40 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.assembly/details/assembly_assembly_graph.plot.svg → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.assembly/details/assembly_assembly_graph.plot.svg...
+2026-07-14 14:25:40 - bvbrc_client - INFO - Workspace.get result: [[[['assembly_assembly_graph.plot.svg', 'txt', '<workspace>/.cga_SW4E1_S337/.assembly/details/', '2026-07-14T14:20:18Z', '23EFED66-7F8F-11F1-8842-7AF94E717DE7', '<user>@bvbrc', 216218, {'original_path': '/tmp/rRnRGop4Ce/assembly/p3_assembly_work/save/details/assembly_assembly_graph.plot.svg'}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/27476760-fc7e-44a4-8e4e-ec73dfe9717a'], 'https://p3.theseed.org/services/shock_api/node/27476760-fc7e-44a4-8e4e-ec73dfe9717a']]]
+2026-07-14 14:25:40 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/27476760-fc7e-44a4-8e4e-ec73dfe9717a
+2026-07-14 14:25:40 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.assembly/details/assembly_assembly_graph.plot.svg (0.2 MB)
+2026-07-14 14:25:40 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.assembly/details/assembly_run_details.json → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.assembly/details/assembly_run_details.json...
+2026-07-14 14:25:40 - bvbrc_client - INFO - Workspace.get result: [[[['assembly_run_details.json', 'txt', '<workspace>/.cga_SW4E1_S337/.assembly/details/', '2026-07-14T14:20:18Z', '24079CEA-7F8F-11F1-97CA-58084F717DE7', '<user>@bvbrc', 3764, {'original_path': '/tmp/rRnRGop4Ce/assembly/p3_assembly_work/save/details/assembly_run_details.json'}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/efbc9d04-6742-44a9-b591-67535031f068'], 'https://p3.theseed.org/services/shock_api/node/efbc9d04-6742-44a9-b591-67535031f068']]]
+2026-07-14 14:25:40 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/efbc9d04-6742-44a9-b591-67535031f068
+2026-07-14 14:25:41 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.assembly/details/assembly_run_details.json (0.0 MB)
+2026-07-14 14:25:41 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/load_files/genome.json → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/load_files/genome.json...
+2026-07-14 14:25:41 - bvbrc_client - INFO - Workspace.get result: [[[['genome.json', 'json', '<workspace>/.cga_SW4E1_S337/.annotation/load_files/', '2026-07-14T14:21:39Z', '542664B0-7F8F-11F1-A1CB-8AEF4E717DE7', '<user>@bvbrc', 1152, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/abae1b4d-b10a-4832-b637-bba8ee317f70'], 'https://p3.theseed.org/services/shock_api/node/abae1b4d-b10a-4832-b637-bba8ee317f70']]]
+2026-07-14 14:25:41 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/abae1b4d-b10a-4832-b637-bba8ee317f70
+2026-07-14 14:25:41 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/load_files/genome.json (0.0 MB)
+2026-07-14 14:25:41 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/load_files/genome_feature.json → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/load_files/genome_feature.json...
+2026-07-14 14:25:41 - bvbrc_client - INFO - Workspace.get result: [[[['genome_feature.json', 'json', '<workspace>/.cga_SW4E1_S337/.annotation/load_files/', '2026-07-14T14:21:39Z', '544658F6-7F8F-11F1-9B90-53084F717DE7', '<user>@bvbrc', 4705011, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/e0bbc757-79e3-4cd5-9504-e4a8ef41ba04'], 'https://p3.theseed.org/services/shock_api/node/e0bbc757-79e3-4cd5-9504-e4a8ef41ba04']]]
+2026-07-14 14:25:41 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/e0bbc757-79e3-4cd5-9504-e4a8ef41ba04
+2026-07-14 14:25:42 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/load_files/genome_feature.json (4.7 MB)
+2026-07-14 14:25:42 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/load_files/genome_amr.json → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/load_files/genome_amr.json...
+2026-07-14 14:25:43 - bvbrc_client - INFO - Workspace.get result: [[[['genome_amr.json', 'json', '<workspace>/.cga_SW4E1_S337/.annotation/load_files/', '2026-07-14T14:21:39Z', '5475ABD8-7F8F-11F1-9B7B-A4E24E717DE7', '<user>@bvbrc', 3, {}, {'is_folder': 0}, 'o', 'n', ''], '[]\n']]]
+2026-07-14 14:25:43 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/load_files/genome_amr.json (0.0 MB)
+2026-07-14 14:25:43 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/load_files/genome_sequence.json → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/load_files/genome_sequence.json...
+2026-07-14 14:25:43 - bvbrc_client - INFO - Workspace.get result: [[[['genome_sequence.json', 'json', '<workspace>/.cga_SW4E1_S337/.annotation/load_files/', '2026-07-14T14:21:39Z', '547B30F8-7F8F-11F1-B613-9E034F717DE7', '<user>@bvbrc', 4995835, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/e8719685-a227-47bd-82ec-4fa08deb6664'], 'https://p3.theseed.org/services/shock_api/node/e8719685-a227-47bd-82ec-4fa08deb6664']]]
+2026-07-14 14:25:43 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/e8719685-a227-47bd-82ec-4fa08deb6664
+2026-07-14 14:25:44 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/load_files/genome_sequence.json (5.0 MB)
+2026-07-14 14:25:44 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/load_files/pathway.json → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/load_files/pathway.json...
+2026-07-14 14:25:44 - bvbrc_client - INFO - Workspace.get result: [[[['pathway.json', 'json', '<workspace>/.cga_SW4E1_S337/.annotation/load_files/', '2026-07-14T14:21:40Z', '54ADEB92-7F8F-11F1-90A9-4CE24E717DE7', '<user>@bvbrc', 2008276, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/ec312fd5-bf0b-4b1a-8113-1c1fa27515c7'], 'https://p3.theseed.org/services/shock_api/node/ec312fd5-bf0b-4b1a-8113-1c1fa27515c7']]]
+2026-07-14 14:25:44 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/ec312fd5-bf0b-4b1a-8113-1c1fa27515c7
+2026-07-14 14:25:45 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/load_files/pathway.json (2.0 MB)
+2026-07-14 14:25:45 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/load_files/subsystem.json → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/load_files/subsystem.json...
+2026-07-14 14:25:45 - bvbrc_client - INFO - Workspace.get result: [[[['subsystem.json', 'json', '<workspace>/.cga_SW4E1_S337/.annotation/load_files/', '2026-07-14T14:21:40Z', '54D67C4C-7F8F-11F1-A451-D5ED4E717DE7', '<user>@bvbrc', 2097677, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/014abd47-abb7-4f20-9309-59ed5dd44b87'], 'https://p3.theseed.org/services/shock_api/node/014abd47-abb7-4f20-9309-59ed5dd44b87']]]
+2026-07-14 14:25:45 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/014abd47-abb7-4f20-9309-59ed5dd44b87
+2026-07-14 14:25:46 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/load_files/subsystem.json (2.1 MB)
+2026-07-14 14:25:46 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/load_files/feature_sequence.json → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/load_files/feature_sequence.json...
+2026-07-14 14:25:46 - bvbrc_client - INFO - Workspace.get result: [[[['feature_sequence.json', 'json', '<workspace>/.cga_SW4E1_S337/.annotation/load_files/', '2026-07-14T14:21:40Z', '54F61DD6-7F8F-11F1-A4DC-60E04E717DE7', '<user>@bvbrc', 7083437, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/2879c46a-d503-4978-88b2-1cb063ee0628'], 'https://p3.theseed.org/services/shock_api/node/2879c46a-d503-4978-88b2-1cb063ee0628']]]
+2026-07-14 14:25:46 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/2879c46a-d503-4978-88b2-1cb063ee0628
+2026-07-14 14:25:48 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/load_files/feature_sequence.json (7.1 MB)
+2026-07-14 14:25:48 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/load_files/sp_gene.json → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/load_files/sp_gene.json...
+2026-07-14 14:25:48 - bvbrc_client - INFO - Workspace.get result: [[[['sp_gene.json', 'json', '<workspace>/.cga_SW4E1_S337/.annotation/load_files/', '2026-07-14T14:21:41Z', '551F179A-7F8F-11F1-B47E-EF024F717DE7', '<user>@bvbrc', 1092561, {}, {'is_folder': 0}, 'o', 'n', 'https://p3.theseed.org/services/shock_api/node/bf585939-2206-49cb-adca-75ad96300b05'], 'https://p3.theseed.org/services/shock_api/node/bf585939-2206-49cb-adca-75ad96300b05']]]
+2026-07-14 14:25:48 - bvbrc_client - INFO - Fetching from Shock node: https://p3.theseed.org/services/shock_api/node/bf585939-2206-49cb-adca-75ad96300b05
+2026-07-14 14:25:48 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/load_files/sp_gene.json (1.1 MB)
+2026-07-14 14:25:48 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/load_files/taxonomy.json → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/load_files/taxonomy.json...
+2026-07-14 14:25:49 - bvbrc_client - INFO - Workspace.get result: [[[['taxonomy.json', 'json', '<workspace>/.cga_SW4E1_S337/.annotation/load_files/', '2026-07-14T14:21:41Z', '55430510-7F8F-11F1-896F-4AD44E717DE7', '<user>@bvbrc', 3, {}, {'is_folder': 0}, 'o', 'n', ''], '[]\n']]]
+2026-07-14 14:25:49 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/load_files/taxonomy.json (0.0 MB)
+2026-07-14 14:25:49 - bvbrc_client - INFO - Downloading <workspace>/.cga_SW4E1_S337/.annotation/load_files/genome_typing.json → results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/load_files/genome_typing.json...
+2026-07-14 14:25:49 - bvbrc_client - INFO - Workspace.get result: [[[['genome_typing.json', 'json', '<workspace>/.cga_SW4E1_S337/.annotation/load_files/', '2026-07-14T14:21:41Z', '5548D5BC-7F8F-11F1-A2A8-97084F717DE7', '<user>@bvbrc', 427, {}, {'is_folder': 0}, 'o', 'n', ''], '[{\n   "scheme_version" : null,\n   "genome_name" : "Bacteria",\n   "loci_missing" : null,\n   "public" : 0,\n   "scheme_name" : null,\n   "taxon_id" : "2",\n   "loci_called" : null,\n   "pct_called" : "0.00",\n   "scheme_source" : "cgmlst.org",\n   "qc" : null,\n   "loci_total" : null,\n   "owner" : "<user>@bvbrc",\n   "method" : "cgMLST",\n   "allele_profile" : null,\n   "sequence_type" : null,\n   "genome_id" : "2.114540"\n}\n]']]]
+2026-07-14 14:25:49 - bvbrc_client - INFO - ✓ Download complete: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full/.annotation/load_files/genome_typing.json (0.0 MB)
+2026-07-14 14:25:49 - bvbrc_cga - INFO - ✓ Archived 50 raw CGA file(s) to results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full (0 failed)
+2026-07-14 14:25:49 - bvbrc_cga - INFO - ✓ Comprehensive Genome Analysis complete for SW4E1_S337
+2026-07-14 14:25:49 - bvbrc_cga - INFO -   Assembly: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/assembly_contigs.fasta
+2026-07-14 14:25:49 - bvbrc_cga - INFO -   Report: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/genome_report.json
+2026-07-14 14:25:49 - bvbrc_cga - INFO -   HTML Report: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/FullGenomeReport.html
+2026-07-14 14:25:49 - bvbrc_cga - INFO -   Full raw output: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/cga_full
+[Tue Jul 14 14:25:49 2026]
+Finished jobid: 4 (Rule: bvbrc_comprehensive_genome_analysis)
+7 of 19 steps (37%) done
+Select jobs to execute...
+Execute 2 jobs...
+
+[Tue Jul 14 14:25:49 2026]
+localrule card_rgi_analysis:
+    input: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/assembly_contigs.fasta, results/3TNCC7UTX9ES/.databases_fresh
+    output: results/3TNCC7UTX9ES/SW4E1_S337/03_resistance/rgi_results.json, results/3TNCC7UTX9ES/SW4E1_S337/03_resistance/rgi_results.csv, results/3TNCC7UTX9ES/SW4E1_S337/03_resistance/rgi_results.txt
+    log: results/3TNCC7UTX9ES/logs/SW4E1_S337_rgi.log
+    jobid: 7
+    reason: Missing output files: results/3TNCC7UTX9ES/SW4E1_S337/03_resistance/rgi_results.txt, results/3TNCC7UTX9ES/SW4E1_S337/03_resistance/rgi_results.csv, results/3TNCC7UTX9ES/SW4E1_S337/03_resistance/rgi_results.json; Input files updated by another job: results/3TNCC7UTX9ES/.databases_fresh, results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/assembly_contigs.fasta
+    wildcards: sample=SW4E1_S337
+    threads: 4
+    resources: tmpdir=/tmp, mem_mb=1000, mem=1 GB, mem_mib=954, disk_mb=1000, disk=1 GB, disk_mib=954, cpu=4
+Activating conda environment: .snakemake/conda/74815134ecf48224911920ab209cf952_
+
+[Tue Jul 14 14:25:49 2026]
+localrule mobile_element_finder:
+    input: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/assembly_contigs.fasta, results/3TNCC7UTX9ES/.databases_fresh
+    output: results/3TNCC7UTX9ES/SW4E1_S337/06_mobile_elements/SW4E1_S337.csv, results/3TNCC7UTX9ES/SW4E1_S337/06_mobile_elements/SW4E1_S337_result.txt, results/3TNCC7UTX9ES/SW4E1_S337/06_mobile_elements/SW4E1_S337_mge_sequences.fna
+    log: results/3TNCC7UTX9ES/logs/SW4E1_S337_mefinder.log
+    jobid: 17
+    reason: Missing output files: results/3TNCC7UTX9ES/SW4E1_S337/06_mobile_elements/SW4E1_S337.csv; Input files updated by another job: results/3TNCC7UTX9ES/.databases_fresh, results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/assembly_contigs.fasta
+    wildcards: sample=SW4E1_S337
+    threads: 4
+    resources: tmpdir=/tmp, mem_mb=1000, mem=1 GB, mem_mib=954, disk_mb=1000, disk=1 GB, disk_mib=954, cpu=4
+Activating conda environment: .snakemake/conda/0f6b738cc7a5c36f03a32540ab838145_
+Select jobs to execute...
+[Tue Jul 14 14:26:05 2026]
+Finished jobid: 17 (Rule: mobile_element_finder)
+8 of 19 steps (42%) done
+Execute 3 jobs...
+
+[Tue Jul 14 14:26:06 2026]
+localrule mlst_analysis:
+    input: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/assembly_contigs.fasta
+    output: results/3TNCC7UTX9ES/SW4E1_S337/05_mlst/mlst_results.txt, results/3TNCC7UTX9ES/SW4E1_S337/05_mlst/mlst_results.json, results/3TNCC7UTX9ES/SW4E1_S337/05_mlst/rmlst_raw.json
+    log: results/3TNCC7UTX9ES/logs/SW4E1_S337_mlst.log
+    jobid: 12
+    reason: Missing output files: results/3TNCC7UTX9ES/SW4E1_S337/05_mlst/mlst_results.txt, results/3TNCC7UTX9ES/SW4E1_S337/05_mlst/mlst_results.json; Input files updated by another job: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/assembly_contigs.fasta
+    wildcards: sample=SW4E1_S337
+    resources: tmpdir=/tmp, mem_mb=1000, mem=1 GB, mem_mib=954, disk_mb=1000, disk=1 GB, disk_mib=954, cpu=1
+Activating conda environment: .snakemake/conda/f421e827d82e463f72abf2c85a5425dd_
+
+[Tue Jul 14 14:26:06 2026]
+localrule parse_genome_report:
+    input: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/genome_report.json
+    output: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/genome_metrics.csv
+    log: results/3TNCC7UTX9ES/logs/SW4E1_S337_parse_report.log
+    jobid: 14
+    reason: Missing output files: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/genome_metrics.csv; Input files updated by another job: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/genome_report.json
+    wildcards: sample=SW4E1_S337
+    resources: tmpdir=/tmp, mem_mb=1000, mem=1 GB, mem_mib=954, disk_mb=1000, disk=1 GB, disk_mib=954, cpu=1
+[Tue Jul 14 14:26:06 2026]
+localrule mobile_element_summary:
+    input: results/3TNCC7UTX9ES/SW4E1_S337/06_mobile_elements/SW4E1_S337.csv
+    output: results/3TNCC7UTX9ES/SW4E1_S337/06_mobile_elements/me_summary.csv, results/3TNCC7UTX9ES/SW4E1_S337/06_mobile_elements/me_summary.json
+    log: results/3TNCC7UTX9ES/logs/SW4E1_S337_mefinder_summary.log
+    jobid: 16
+    reason: Missing output files: results/3TNCC7UTX9ES/SW4E1_S337/06_mobile_elements/me_summary.csv; Input files updated by another job: results/3TNCC7UTX9ES/SW4E1_S337/06_mobile_elements/SW4E1_S337.csv
+    wildcards: sample=SW4E1_S337
+    resources: tmpdir=/tmp, mem_mb=1000, mem=1 GB, mem_mib=954, disk_mb=1000, disk=1 GB, disk_mib=954, cpu=1
+✓ Genome metrics extracted
+✓ MobileElementFinder summary for SW4E1_S337: 5 MGEs (insertion sequence:1, mite:4)
+[Tue Jul 14 14:26:06 2026]
+Finished jobid: 14 (Rule: parse_genome_report)
+9 of 19 steps (47%) done
+[Tue Jul 14 14:26:06 2026]
+Finished jobid: 16 (Rule: mobile_element_summary)
+10 of 19 steps (53%) done
+✓ MLST parsed: Enterobacter cloacae (scheme=ecloacae, ST=765, via rMLST)
+[Tue Jul 14 14:26:33 2026]
+Finished jobid: 12 (Rule: mlst_analysis)
+11 of 19 steps (58%) done
+✓ Wrote 221 resistance-gene hit(s) to results/3TNCC7UTX9ES/SW4E1_S337/03_resistance/rgi_results.csv
+[Tue Jul 14 14:27:29 2026]
+Finished jobid: 7 (Rule: card_rgi_analysis)
+12 of 19 steps (63%) done
+Select jobs to execute...
+Execute 4 jobs...
+
+[Tue Jul 14 14:27:29 2026]
+localrule mobile_element_colocation:
+    input: results/3TNCC7UTX9ES/SW4E1_S337/06_mobile_elements/SW4E1_S337.csv, results/3TNCC7UTX9ES/SW4E1_S337/03_resistance/rgi_results.json
+    output: results/3TNCC7UTX9ES/SW4E1_S337/06_mobile_elements/SW4E1_S337_arg_mge_colocation.csv, results/3TNCC7UTX9ES/SW4E1_S337/06_mobile_elements/SW4E1_S337_arg_mge_colocation.json
+    log: results/3TNCC7UTX9ES/logs/SW4E1_S337_mge_colocation.log
+    jobid: 18
+    reason: Missing output files: results/3TNCC7UTX9ES/SW4E1_S337/06_mobile_elements/SW4E1_S337_arg_mge_colocation.csv, results/3TNCC7UTX9ES/SW4E1_S337/06_mobile_elements/SW4E1_S337_arg_mge_colocation.json; Input files updated by another job: results/3TNCC7UTX9ES/SW4E1_S337/03_resistance/rgi_results.json, results/3TNCC7UTX9ES/SW4E1_S337/06_mobile_elements/SW4E1_S337.csv
+    wildcards: sample=SW4E1_S337
+    resources: tmpdir=/tmp, mem_mb=1000, mem=1 GB, mem_mib=954, disk_mb=1000, disk=1 GB, disk_mib=954, cpu=1
+[Tue Jul 14 14:27:29 2026]
+localrule extract_rgi_proteins:
+    input: results/3TNCC7UTX9ES/SW4E1_S337/03_resistance/rgi_results.json
+    output: results/3TNCC7UTX9ES/SW4E1_S337/04_blast/rgi_proteins.fasta, results/3TNCC7UTX9ES/SW4E1_S337/04_blast/rgi_proteins.csv
+    log: results/3TNCC7UTX9ES/logs/SW4E1_S337_extract_rgi_proteins.log
+    jobid: 9
+    reason: Missing output files: results/3TNCC7UTX9ES/SW4E1_S337/04_blast/rgi_proteins.fasta; Input files updated by another job: results/3TNCC7UTX9ES/SW4E1_S337/03_resistance/rgi_results.json
+    wildcards: sample=SW4E1_S337
+    resources: tmpdir=/tmp, mem_mb=1000, mem=1 GB, mem_mib=954, disk_mb=1000, disk=1 GB, disk_mib=954, cpu=1
+[Tue Jul 14 14:27:29 2026]
+localrule evaluate_novelty:
+    input: results/3TNCC7UTX9ES/SW4E1_S337/03_resistance/rgi_results.json, results/3TNCC7UTX9ES/SW4E1_S337/03_resistance/rgi_results.txt
+    output: results/3TNCC7UTX9ES/SW4E1_S337/03_resistance/novelty_report.txt
+    log: results/3TNCC7UTX9ES/logs/SW4E1_S337_novelty.log
+    jobid: 15
+    reason: Missing output files: results/3TNCC7UTX9ES/SW4E1_S337/03_resistance/novelty_report.txt; Input files updated by another job: results/3TNCC7UTX9ES/SW4E1_S337/03_resistance/rgi_results.txt, results/3TNCC7UTX9ES/SW4E1_S337/03_resistance/rgi_results.json
+    wildcards: sample=SW4E1_S337
+    resources: tmpdir=/tmp, mem_mb=1000, mem=1 GB, mem_mib=954, disk_mb=1000, disk=1 GB, disk_mib=954, cpu=1
+[Tue Jul 14 14:27:29 2026]
+localrule blast_ncbi_novelty:
+    input: results/3TNCC7UTX9ES/SW4E1_S337/03_resistance/rgi_results.json, resources/blastdb/amr/.ready
+    output: results/3TNCC7UTX9ES/SW4E1_S337/04_blast/blast_results.csv, results/3TNCC7UTX9ES/SW4E1_S337/04_blast/blast_results_full.tsv
+    log: results/3TNCC7UTX9ES/logs/SW4E1_S337_blast.log
+    jobid: 10
+    reason: Missing output files: results/3TNCC7UTX9ES/SW4E1_S337/04_blast/blast_results_full.tsv, results/3TNCC7UTX9ES/SW4E1_S337/04_blast/blast_results.csv; Input files updated by another job: results/3TNCC7UTX9ES/SW4E1_S337/03_resistance/rgi_results.json
+    wildcards: sample=SW4E1_S337
+    threads: 4
+    resources: tmpdir=/tmp, mem_mb=1000, mem=1 GB, mem_mib=954, disk_mb=1000, disk=1 GB, disk_mib=954, cpu=4
+Activating conda environment: .snakemake/conda/0375c4aacf6bc027577d96ce6e2d49c4_
+✓ Extracted 221 RGI-predicted protein(s) to results/3TNCC7UTX9ES/SW4E1_S337/04_blast/rgi_proteins.fasta
+[Tue Jul 14 14:27:30 2026]
+Finished jobid: 9 (Rule: extract_rgi_proteins)
+13 of 19 steps (68%) done
+✓ co-location [SW4E1_S337]: 0/220 resistance gene(s) on/near a mobile element (≤5000 bp) → results/3TNCC7UTX9ES/SW4E1_S337/06_mobile_elements/SW4E1_S337_arg_mge_colocation.csv
+[Tue Jul 14 14:27:30 2026]
+Finished jobid: 18 (Rule: mobile_element_colocation)
+14 of 19 steps (74%) done
+Select jobs to execute...
+Execute 1 jobs...
+
+[Tue Jul 14 14:27:30 2026]
+localrule generate_master_report:
+    input: results/3TNCC7UTX9ES/SW4E1_S337/03_resistance/rgi_results.csv, results/3TNCC7UTX9ES/SW4E1_S337/05_mlst/mlst_results.json, results/3TNCC7UTX9ES/SW4E1_S337/06_mobile_elements/SW4E1_S337.csv, results/3TNCC7UTX9ES/SW4E1_S337/06_mobile_elements/SW4E1_S337_arg_mge_colocation.json
+    output: results/3TNCC7UTX9ES/master_report.csv
+    log: results/3TNCC7UTX9ES/logs/master_report.log
+    jobid: 19
+    reason: Missing output files: results/3TNCC7UTX9ES/master_report.csv; Input files updated by another job: results/3TNCC7UTX9ES/SW4E1_S337/03_resistance/rgi_results.csv, results/3TNCC7UTX9ES/SW4E1_S337/06_mobile_elements/SW4E1_S337_arg_mge_colocation.json, results/3TNCC7UTX9ES/SW4E1_S337/05_mlst/mlst_results.json, results/3TNCC7UTX9ES/SW4E1_S337/06_mobile_elements/SW4E1_S337.csv
+    resources: tmpdir=/tmp, mem_mb=1000, mem=1 GB, mem_mib=954, disk_mb=1000, disk=1 GB, disk_mib=954, cpu=1
+✓ Novelty evaluation complete
+[Tue Jul 14 14:27:30 2026]
+Finished jobid: 15 (Rule: evaluate_novelty)
+15 of 19 steps (79%) done
+✓ Master report generated: results/3TNCC7UTX9ES/master_report.csv (1 isolate(s))
+[Tue Jul 14 14:27:30 2026]
+Finished jobid: 19 (Rule: generate_master_report)
+16 of 19 steps (84%) done
+→ blast_ncbi: searching 15 'antibiotic inactivation' enzyme(s) against the local AMR catalog...
+  15/15 matched a known resistance protein
+  sources: 15 from the AMR catalog, 0 from NCBI, 0 unresolved
+✓ blast_ncbi: 15 enzyme(s) BLASTed, 15 potentially novel → results/3TNCC7UTX9ES/SW4E1_S337/04_blast/blast_results.csv (all hits: results/3TNCC7UTX9ES/SW4E1_S337/04_blast/blast_results_full.tsv)
+[Tue Jul 14 14:27:31 2026]
+Finished jobid: 10 (Rule: blast_ncbi_novelty)
+17 of 19 steps (89%) done
+Select jobs to execute...
+Execute 1 jobs...
+
+[Tue Jul 14 14:27:31 2026]
+localrule generate_sample_report:
+    input: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/genome_metrics.csv, results/3TNCC7UTX9ES/SW4E1_S337/03_resistance/novelty_report.txt, results/3TNCC7UTX9ES/SW4E1_S337/04_blast/blast_results.csv, results/3TNCC7UTX9ES/SW4E1_S337/05_mlst/mlst_results.json, results/3TNCC7UTX9ES/SW4E1_S337/06_mobile_elements/me_summary.csv
+    output: results/3TNCC7UTX9ES/SW4E1_S337/summary/report.html
+    log: results/3TNCC7UTX9ES/logs/SW4E1_S337_report.log
+    jobid: 13
+    reason: Missing output files: results/3TNCC7UTX9ES/SW4E1_S337/summary/report.html; Input files updated by another job: results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/genome_metrics.csv, results/3TNCC7UTX9ES/SW4E1_S337/05_mlst/mlst_results.json, results/3TNCC7UTX9ES/SW4E1_S337/06_mobile_elements/me_summary.csv, results/3TNCC7UTX9ES/SW4E1_S337/03_resistance/novelty_report.txt, results/3TNCC7UTX9ES/SW4E1_S337/04_blast/blast_results.csv
+    wildcards: sample=SW4E1_S337
+    resources: tmpdir=/tmp, mem_mb=1000, mem=1 GB, mem_mib=954, disk_mb=1000, disk=1 GB, disk_mib=954, cpu=1
+✓ Sample report generated: results/3TNCC7UTX9ES/SW4E1_S337/summary/report.html
+[Tue Jul 14 14:27:31 2026]
+Finished jobid: 13 (Rule: generate_sample_report)
+18 of 19 steps (95%) done
+Select jobs to execute...
+Execute 1 jobs...
+
+[Tue Jul 14 14:27:31 2026]
+Job 0: Workflow complete! All outputs generated.
+Reason: Input files updated by another job: results/3TNCC7UTX9ES/SW4E1_S337/06_mobile_elements/SW4E1_S337_arg_mge_colocation.csv, results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/assembly_contigs.fasta, results/3TNCC7UTX9ES/SW4E1_S337/summary/report.html, results/3TNCC7UTX9ES/SW4E1_S337/06_mobile_elements/me_summary.csv, results/3TNCC7UTX9ES/SW4E1_S337/05_mlst/mlst_results.txt, results/3TNCC7UTX9ES/SW4E1_S337/04_blast/rgi_proteins.fasta, results/3TNCC7UTX9ES/SW4E1_S337/03_resistance/rgi_results.json, results/3TNCC7UTX9ES/master_report.csv, results/3TNCC7UTX9ES/SW4E1_S337/04_blast/blast_results_full.tsv, results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/genome_report.json, results/3TNCC7UTX9ES/SW4E1_S337/01_raw_qc/validation.txt, results/3TNCC7UTX9ES/SW4E1_S337/04_blast/blast_results.csv
+[Tue Jul 14 14:27:31 2026]
+Finished jobid: 0 (Rule: all)
+19 of 19 steps (100%) done
+Complete log(s): /app/.snakemake/log/2026-07-14T135312.214306.snakemake.log
+Loaded 1 samples

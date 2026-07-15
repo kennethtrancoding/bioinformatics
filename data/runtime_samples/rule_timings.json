@@ -1,0 +1,74 @@
+[
+  {
+    "rule": "bvbrc_comprehensive_genome_analysis",
+    "seconds": 1571.0
+  },
+  {
+    "rule": "bvbrc_similar_genome_finder",
+    "seconds": 367.0
+  },
+  {
+    "rule": "card_rgi_analysis",
+    "seconds": 100.0
+  },
+  {
+    "rule": "mlst_analysis",
+    "seconds": 27.0
+  },
+  {
+    "rule": "bvbrc_upload_reads",
+    "seconds": 17.0
+  },
+  {
+    "rule": "mobile_element_finder",
+    "seconds": 16.0
+  },
+  {
+    "rule": "blast_ncbi_novelty",
+    "seconds": 2.0
+  },
+  {
+    "rule": "fetch_raw_read",
+    "seconds": 1.0
+  },
+  {
+    "rule": "fetch_raw_read",
+    "seconds": 1.0
+  },
+  {
+    "rule": "validate_fastq",
+    "seconds": 1.0
+  },
+  {
+    "rule": "mobile_element_colocation",
+    "seconds": 1.0
+  },
+  {
+    "rule": "extract_rgi_proteins",
+    "seconds": 1.0
+  },
+  {
+    "rule": "evaluate_novelty",
+    "seconds": 1.0
+  },
+  {
+    "rule": "setup_fresh_databases",
+    "seconds": 0.0
+  },
+  {
+    "rule": "parse_genome_report",
+    "seconds": 0.0
+  },
+  {
+    "rule": "mobile_element_summary",
+    "seconds": 0.0
+  },
+  {
+    "rule": "generate_master_report",
+    "seconds": 0.0
+  },
+  {
+    "rule": "generate_sample_report",
+    "seconds": 0.0
+  }
+]

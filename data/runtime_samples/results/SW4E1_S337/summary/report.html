@@ -1,0 +1,364 @@
+
+<!DOCTYPE html>
+<html>
+<head>
+<style>
+.tabs {
+	width: 600px;
+  font-family: Arial, sans-serif;
+}
+
+.tabs input[type="radio"] {
+	display: none;
+}
+
+.labels label {
+	display: inline-block;
+  padding: 10px 15px;
+  background: #ddd;
+  cursor: pointer;
+  border: 1px solid #ccc;
+}
+
+.content {
+	display: none;
+  padding: 20px;
+}
+
+table tr td {
+  border: 1px solid #000;
+}
+
+#summary:checked ~ .contents #summary-content,
+#bvbrc:checked ~ .contents #bvbrc-content,
+#blast:checked ~ .contents #blast-content,
+#mlst:checked ~ .contents #mlst-content,
+#mef:checked ~ .contents #mef-content,
+#card:checked ~ .contents #card-content {
+	display: block;
+}
+
+#summary:checked ~ .labels label[for="summary"],
+#bvbrc:checked ~ .labels label[for="bvbrc"],
+#blast:checked ~ .labels label[for="blast"],
+#mlst:checked ~ .labels label[for="mlst"],
+#mef:checked ~ .labels label[for="mef"],
+#card:checked ~ .labels label[for="card"] {
+	background: white;
+  border-bottom: 1px solid white;
+}
+</style>
+</head>
+
+<body>
+
+<div class="tabs">
+
+  <input type="radio" id="summary" name="tabs" checked>
+  <input type="radio" id="bvbrc" name="tabs">
+  <input type="radio" id="blast" name="tabs">
+  <input type="radio" id="mlst" name="tabs">
+  <input type="radio" id="mef" name="tabs">
+  <input type="radio" id="card" name="tabs">
+
+  <div class="labels">
+    <label for="summary">Summary</label>
+    <label for="bvbrc">BV-BRC</label>
+    <label for="blast">BLAST</label>
+    <label for="mlst">MLST</label>
+    <label for="mef">MEF</label>
+    <label for="card">CARD</label>
+  </div>
+
+  <div class="contents">
+
+    <div id="summary-content" class="content">
+      <h2>Summary</h2>
+      <table>
+  <tr><th></th><th>contigs</th><th>gc_content</th><th>genome_length</th><th>n50</th><th>l50</th><th>species</th><th>sequence_type</th></tr>
+  <tr><th>0</th><td>16</td><td>55.035774212846</td><td>4986413</td><td>2821155</td><td>1</td><td>Enterobacter cloacae</td><td>765</td></tr>
+</table>
+    </div>
+
+    <div id="bvbrc-content" class="content">
+      <h2>BV-BRC</h2>
+      <table>
+  <tr><th></th><th>contigs</th><th>gc_content</th><th>genome_length</th><th>n50</th><th>l50</th></tr>
+  <tr><th>0</th><td>16</td><td>55.035774212846</td><td>4986413</td><td>2821155</td><td>1</td></tr>
+</table>
+    </div>
+
+    <div id="blast-content" class="content">
+      <h2>BLAST</h2>
+      <table>
+  <tr><th></th><th>query_gene</th><th>card_identity_pct</th><th>contig</th><th>orf_start</th><th>orf_end</th><th>ncbi_top_hit</th><th>ncbi_accession</th><th>ncbi_identity_pct</th><th>ncbi_coverage_pct</th><th>source</th><th>location</th><th>is_novel</th><th>note</th></tr>
+  <tr><th>0</th><td>FosA4</td><td>68.38</td><td>assembly_contig_6</td><td>185937</td><td>186362</td><td>fosA fosfomycin resistance glutathione transferase FosA</td><td>WP_038415208</td><td>97.16</td><td>100.0</td><td>AMR catalog (local)</td><td>unknown</td><td>yes</td><td></td></tr>
+  <tr><th>1</th><td>YOC-1</td><td>68.83</td><td>assembly_contig_6</td><td>16194</td><td>17339</td><td>blaCMH-32 class C beta-lactamase CMH-32</td><td>WP_367187945</td><td>99.47</td><td>100.0</td><td>AMR catalog (local)</td><td>unknown</td><td>yes</td><td></td></tr>
+  <tr><th>2</th><td>FosA3</td><td>69.85</td><td>assembly_contig_6</td><td>185937</td><td>186362</td><td>fosA fosfomycin resistance glutathione transferase FosA</td><td>WP_038415208</td><td>97.16</td><td>100.0</td><td>AMR catalog (local)</td><td>unknown</td><td>yes</td><td></td></tr>
+  <tr><th>3</th><td>BUT-2</td><td>70.23</td><td>assembly_contig_6</td><td>16194</td><td>17339</td><td>blaCMH-32 class C beta-lactamase CMH-32</td><td>WP_367187945</td><td>99.47</td><td>100.0</td><td>AMR catalog (local)</td><td>unknown</td><td>yes</td><td></td></tr>
+  <tr><th>4</th><td>BUT-1</td><td>70.23</td><td>assembly_contig_6</td><td>16194</td><td>17339</td><td>blaCMH-32 class C beta-lactamase CMH-32</td><td>WP_367187945</td><td>99.47</td><td>100.0</td><td>AMR catalog (local)</td><td>unknown</td><td>yes</td><td></td></tr>
+  <tr><th>5</th><td>fosA5</td><td>71.22</td><td>assembly_contig_6</td><td>185937</td><td>186362</td><td>fosA fosfomycin resistance glutathione transferase FosA</td><td>WP_038415208</td><td>97.16</td><td>100.0</td><td>AMR catalog (local)</td><td>unknown</td><td>yes</td><td></td></tr>
+  <tr><th>6</th><td>SFDC-1</td><td>73.23</td><td>assembly_contig_6</td><td>16194</td><td>17339</td><td>blaCMH-32 class C beta-lactamase CMH-32</td><td>WP_367187945</td><td>99.47</td><td>100.0</td><td>AMR catalog (local)</td><td>unknown</td><td>yes</td><td></td></tr>
+  <tr><th>7</th><td>CMY-188</td><td>74.02</td><td>assembly_contig_6</td><td>16194</td><td>17339</td><td>blaCMH-32 class C beta-lactamase CMH-32</td><td>WP_367187945</td><td>99.47</td><td>100.0</td><td>AMR catalog (local)</td><td>unknown</td><td>yes</td><td></td></tr>
+  <tr><th>8</th><td>CMY-190</td><td>74.02</td><td>assembly_contig_6</td><td>16194</td><td>17339</td><td>blaCMH-32 class C beta-lactamase CMH-32</td><td>WP_367187945</td><td>99.47</td><td>100.0</td><td>AMR catalog (local)</td><td>unknown</td><td>yes</td><td></td></tr>
+  <tr><th>9</th><td>CMY-179</td><td>74.02</td><td>assembly_contig_6</td><td>16194</td><td>17339</td><td>blaCMH-32 class C beta-lactamase CMH-32</td><td>WP_367187945</td><td>99.47</td><td>100.0</td><td>AMR catalog (local)</td><td>unknown</td><td>yes</td><td></td></tr>
+  <tr><th>10</th><td>CMY-192</td><td>74.03</td><td>assembly_contig_6</td><td>16194</td><td>17339</td><td>blaCMH-32 class C beta-lactamase CMH-32</td><td>WP_367187945</td><td>99.47</td><td>100.0</td><td>AMR catalog (local)</td><td>unknown</td><td>yes</td><td></td></tr>
+  <tr><th>11</th><td>CMY-189</td><td>74.28</td><td>assembly_contig_6</td><td>16194</td><td>17339</td><td>blaCMH-32 class C beta-lactamase CMH-32</td><td>WP_367187945</td><td>99.47</td><td>100.0</td><td>AMR catalog (local)</td><td>unknown</td><td>yes</td><td></td></tr>
+  <tr><th>12</th><td>CMY-181</td><td>74.54</td><td>assembly_contig_6</td><td>16194</td><td>17339</td><td>blaCMH-32 class C beta-lactamase CMH-32</td><td>WP_367187945</td><td>99.47</td><td>100.0</td><td>AMR catalog (local)</td><td>unknown</td><td>yes</td><td></td></tr>
+  <tr><th>13</th><td>CMY-180</td><td>74.54</td><td>assembly_contig_6</td><td>16194</td><td>17339</td><td>blaCMH-32 class C beta-lactamase CMH-32</td><td>WP_367187945</td><td>99.47</td><td>100.0</td><td>AMR catalog (local)</td><td>unknown</td><td>yes</td><td></td></tr>
+  <tr><th>14</th><td>CMY-172</td><td>74.8</td><td>assembly_contig_6</td><td>16194</td><td>17339</td><td>blaCMH-32 class C beta-lactamase CMH-32</td><td>WP_367187945</td><td>99.47</td><td>100.0</td><td>AMR catalog (local)</td><td>unknown</td><td>yes</td><td></td></tr>
+</table>
+    </div>
+
+    <div id="mlst-content" class="content">
+      <h2>MLST</h2>
+      <table>
+  <tr><th></th><th>sample</th><th>filename</th><th>scheme</th><th>st</th><th>alleles</th><th>scheme_species</th><th>species</th><th>species_method</th><th>species_support</th><th>species_matches</th></tr>
+  <tr><th>0</th><td>SW4E1_S337</td><td>results/3TNCC7UTX9ES/SW4E1_S337/02_assembly/assembly_contigs.fasta</td><td>ecloacae</td><td>765</td><td>[&#x27;dnaA(156)&#x27;, &#x27;fusA(92)&#x27;, &#x27;gyrB(169)&#x27;, &#x27;leuS(218)&#x27;, &#x27;pyrG(105)&#x27;, &#x27;rplB(22)&#x27;, &#x27;rpoB(99)&#x27;]</td><td>Enterobacter cloacae complex</td><td>Enterobacter cloacae</td><td>rMLST</td><td>100.0</td><td>[{&#x27;species&#x27;: &#x27;Enterobacter cloacae&#x27;, &#x27;support&#x27;: 100.0}]</td></tr>
+</table>
+    </div>
+
+    <div id="mef-content" class="content">
+      <h2>Mobile Genetic Elements</h2>
+      <table>
+  <tr><th></th><th>sample_id</th><th>element_type</th><th>count</th></tr>
+  <tr><th>0</th><td>SW4E1_S337</td><td>insertion sequence</td><td>1</td></tr>
+  <tr><th>1</th><td>SW4E1_S337</td><td>mite</td><td>4</td></tr>
+  <tr><th>2</th><td>SW4E1_S337</td><td>TOTAL</td><td>5</td></tr>
+</table>
+    </div>
+
+    <div id="card-content" class="content">
+      <h2>CARD</h2>
+      <table>
+  <tr><th></th><th>Gene</th><th>Antibiotic</th><th>Identity_pct</th><th>Coverage_pct</th><th>Novel_flag</th><th>Notes</th></tr>
+  <tr><th>0</th><td>acrD</td><td>aminoglycoside antibiotic</td><td>91.32</td><td>100.0</td><td>YES</td><td>identity 91.3% &lt; 95.0%</td></tr>
+  <tr><th>1</th><td>adeF</td><td>fluoroquinolone antibiotic; tetracycline antibiotic</td><td>40.73</td><td>100.0</td><td>YES</td><td>identity 40.7% &lt; 95.0%</td></tr>
+  <tr><th>2</th><td>mdtC</td><td>aminocoumarin antibiotic</td><td>91.6</td><td>100.0</td><td>YES</td><td>identity 91.6% &lt; 95.0%</td></tr>
+  <tr><th>3</th><td>mdtB</td><td>aminocoumarin antibiotic</td><td>89.52</td><td>100.0</td><td>YES</td><td>identity 89.5% &lt; 95.0%</td></tr>
+  <tr><th>4</th><td>marA</td><td>fluoroquinolone antibiotic; monobactam; carbapenem; cephalosporin; glycylcycline; penicillin beta-lactam; tetracycline antibiotic; rifamycin antibiotic; phenicol antibiotic; disinfecting agents and antiseptics</td><td>93.55</td><td>99.21</td><td>YES</td><td>identity 93.5% &lt; 95.0%</td></tr>
+  <tr><th>5</th><td>oqxA</td><td>fluoroquinolone antibiotic; glycylcycline; tetracycline antibiotic; diaminopyrimidine antibiotic; nitrofuran antibiotic</td><td>91.82</td><td>100.0</td><td>YES</td><td>identity 91.8% &lt; 95.0%</td></tr>
+  <tr><th>6</th><td>oqxB</td><td>fluoroquinolone antibiotic; glycylcycline; tetracycline antibiotic; diaminopyrimidine antibiotic; nitrofuran antibiotic</td><td>97.81</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>7</th><td>adeF</td><td>fluoroquinolone antibiotic; tetracycline antibiotic</td><td>60.84</td><td>100.0</td><td>YES</td><td>identity 60.8% &lt; 95.0%</td></tr>
+  <tr><th>8</th><td>Klebsiella pneumoniae KpnF</td><td>macrolide antibiotic; aminoglycoside antibiotic; cephalosporin; tetracycline antibiotic; peptide antibiotic; rifamycin antibiotic; disinfecting agents and antiseptics</td><td>87.16</td><td>100.0</td><td>YES</td><td>identity 87.2% &lt; 95.0%</td></tr>
+  <tr><th>9</th><td>Klebsiella pneumoniae KpnE</td><td>macrolide antibiotic; aminoglycoside antibiotic; cephalosporin; tetracycline antibiotic; peptide antibiotic; rifamycin antibiotic; disinfecting agents and antiseptics</td><td>84.17</td><td>108.33</td><td>YES</td><td>identity 84.2% &lt; 95.0%</td></tr>
+  <tr><th>10</th><td>msbA</td><td>nitroimidazole antibiotic</td><td>94.5</td><td>100.0</td><td>YES</td><td>identity 94.5% &lt; 95.0%</td></tr>
+  <tr><th>11</th><td>Escherichia coli mdfA</td><td>tetracycline antibiotic; phenicol antibiotic; disinfecting agents and antiseptics</td><td>86.98</td><td>100.0</td><td>YES</td><td>identity 87.0% &lt; 95.0%</td></tr>
+  <tr><th>12</th><td>ramA</td><td>fluoroquinolone antibiotic; monobactam; carbapenem; cephalosporin; glycylcycline; penicillin beta-lactam; tetracycline antibiotic; rifamycin antibiotic; phenicol antibiotic; disinfecting agents and antiseptics</td><td>99.19</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>13</th><td>Enterobacter cloacae acrA</td><td>fluoroquinolone antibiotic; cephalosporin; glycylcycline; penicillin beta-lactam; tetracycline antibiotic; rifamycin antibiotic; phenicol antibiotic; disinfecting agents and antiseptics</td><td>96.22</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>14</th><td>Escherichia coli acrA</td><td>fluoroquinolone antibiotic; cephalosporin; glycylcycline; penicillin beta-lactam; tetracycline antibiotic; rifamycin antibiotic; phenicol antibiotic; disinfecting agents and antiseptics</td><td>86.9</td><td>100.0</td><td>YES</td><td>identity 86.9% &lt; 95.0%</td></tr>
+  <tr><th>15</th><td>Shigella flexneri acrA</td><td>fluoroquinolone antibiotic; cephalosporin; glycylcycline; penicillin beta-lactam; tetracycline antibiotic; rifamycin antibiotic; phenicol antibiotic; disinfecting agents and antiseptics</td><td>86.65</td><td>100.0</td><td>YES</td><td>identity 86.7% &lt; 95.0%</td></tr>
+  <tr><th>16</th><td>acrB</td><td>fluoroquinolone antibiotic; cephalosporin; glycylcycline; penicillin beta-lactam; tetracycline antibiotic; rifamycin antibiotic; phenicol antibiotic; disinfecting agents and antiseptics</td><td>92.95</td><td>99.9</td><td>YES</td><td>identity 93.0% &lt; 95.0%</td></tr>
+  <tr><th>17</th><td>adeF</td><td>fluoroquinolone antibiotic; tetracycline antibiotic</td><td>40.92</td><td>99.9</td><td>YES</td><td>identity 40.9% &lt; 95.0%</td></tr>
+  <tr><th>18</th><td>vanG</td><td>glycopeptide antibiotic</td><td>40.51</td><td>104.87</td><td>YES</td><td>identity 40.5% &lt; 95.0%</td></tr>
+  <tr><th>19</th><td>adeF</td><td>fluoroquinolone antibiotic; tetracycline antibiotic</td><td>40.63</td><td>98.02</td><td>YES</td><td>identity 40.6% &lt; 95.0%</td></tr>
+  <tr><th>20</th><td>bacA</td><td>peptide antibiotic</td><td>95.24</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>21</th><td>rsmA</td><td>fluoroquinolone antibiotic; diaminopyrimidine antibiotic; phenicol antibiotic</td><td>85.25</td><td>100.0</td><td>YES</td><td>identity 85.2% &lt; 95.0%</td></tr>
+  <tr><th>22</th><td>emrB</td><td>fluoroquinolone antibiotic</td><td>92.67</td><td>100.59</td><td>YES</td><td>identity 92.7% &lt; 95.0%</td></tr>
+  <tr><th>23</th><td>Klebsiella pneumoniae KpnH</td><td>macrolide antibiotic; fluoroquinolone antibiotic; aminoglycoside antibiotic; carbapenem; cephalosporin; penicillin beta-lactam; peptide antibiotic</td><td>92.48</td><td>100.59</td><td>YES</td><td>identity 92.5% &lt; 95.0%</td></tr>
+  <tr><th>24</th><td>emrR</td><td>fluoroquinolone antibiotic</td><td>91.43</td><td>100.0</td><td>YES</td><td>identity 91.4% &lt; 95.0%</td></tr>
+  <tr><th>25</th><td>leuO</td><td>nucleoside antibiotic; disinfecting agents and antiseptics</td><td>81.53</td><td>100.0</td><td>YES</td><td>identity 81.5% &lt; 95.0%</td></tr>
+  <tr><th>26</th><td>CRP</td><td>macrolide antibiotic; fluoroquinolone antibiotic; penicillin beta-lactam</td><td>99.05</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>27</th><td>ArnT</td><td>peptide antibiotic</td><td>69.51</td><td>100.0</td><td>YES</td><td>identity 69.5% &lt; 95.0%</td></tr>
+  <tr><th>28</th><td>PmrF</td><td>peptide antibiotic</td><td>85.09</td><td>101.55</td><td>YES</td><td>identity 85.1% &lt; 95.0%</td></tr>
+  <tr><th>29</th><td>CMH-32</td><td>cephalosporin</td><td>99.48</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>30</th><td>CMH-17</td><td>cephalosporin</td><td>99.21</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>31</th><td>CMH-34</td><td>cephalosporin</td><td>98.95</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>32</th><td>CMH-5</td><td>cephalosporin</td><td>98.69</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>33</th><td>CMH-31</td><td>cephalosporin</td><td>96.06</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>34</th><td>CMH-15</td><td>cephalosporin</td><td>95.54</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>35</th><td>CMH-2</td><td>cephalosporin</td><td>95.8</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>36</th><td>CMH-4</td><td>cephalosporin</td><td>95.54</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>37</th><td>CMH-24</td><td>cephalosporin</td><td>95.28</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>38</th><td>CMH-18</td><td>cephalosporin</td><td>95.54</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>39</th><td>CMH-28</td><td>cephalosporin</td><td>95.01</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>40</th><td>CMH-13</td><td>cephalosporin</td><td>95.28</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>41</th><td>CMH-12</td><td>cephalosporin</td><td>95.28</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>42</th><td>CMH-8</td><td>cephalosporin</td><td>95.01</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>43</th><td>CMH-16</td><td>cephalosporin</td><td>95.28</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>44</th><td>CMH-3</td><td>cephalosporin</td><td>95.28</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>45</th><td>CMH-25</td><td>cephalosporin</td><td>95.28</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>46</th><td>CMH-21</td><td>cephalosporin</td><td>95.28</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>47</th><td>CMH-14</td><td>cephalosporin</td><td>95.28</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>48</th><td>CMH-11</td><td>cephalosporin</td><td>95.01</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>49</th><td>CMH-1</td><td>cephalosporin</td><td>95.28</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>50</th><td>CMH-7</td><td>cephalosporin</td><td>94.75</td><td>100.0</td><td>YES</td><td>identity 94.8% &lt; 95.0%</td></tr>
+  <tr><th>51</th><td>CMH-20</td><td>cephalosporin</td><td>95.28</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>52</th><td>CMH-30</td><td>cephalosporin</td><td>95.01</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>53</th><td>CMH-6</td><td>cephalosporin</td><td>94.75</td><td>100.0</td><td>YES</td><td>identity 94.8% &lt; 95.0%</td></tr>
+  <tr><th>54</th><td>CMH-29</td><td>cephalosporin</td><td>94.49</td><td>100.0</td><td>YES</td><td>identity 94.5% &lt; 95.0%</td></tr>
+  <tr><th>55</th><td>CMH-33</td><td>cephalosporin</td><td>94.75</td><td>100.0</td><td>YES</td><td>identity 94.8% &lt; 95.0%</td></tr>
+  <tr><th>56</th><td>CMH-19</td><td>cephalosporin</td><td>94.75</td><td>100.0</td><td>YES</td><td>identity 94.8% &lt; 95.0%</td></tr>
+  <tr><th>57</th><td>CMH-10</td><td>cephalosporin</td><td>94.75</td><td>100.0</td><td>YES</td><td>identity 94.8% &lt; 95.0%</td></tr>
+  <tr><th>58</th><td>CMH-9</td><td>cephalosporin</td><td>94.75</td><td>100.0</td><td>YES</td><td>identity 94.8% &lt; 95.0%</td></tr>
+  <tr><th>59</th><td>CMH-27</td><td>cephalosporin</td><td>94.75</td><td>100.0</td><td>YES</td><td>identity 94.8% &lt; 95.0%</td></tr>
+  <tr><th>60</th><td>CMH-26</td><td>cephalosporin</td><td>94.49</td><td>100.0</td><td>YES</td><td>identity 94.5% &lt; 95.0%</td></tr>
+  <tr><th>61</th><td>ACT-193</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>90.81</td><td>100.0</td><td>YES</td><td>identity 90.8% &lt; 95.0%</td></tr>
+  <tr><th>62</th><td>ACT-50</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>90.55</td><td>100.0</td><td>YES</td><td>identity 90.5% &lt; 95.0%</td></tr>
+  <tr><th>63</th><td>ACT-180</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>90.29</td><td>100.0</td><td>YES</td><td>identity 90.3% &lt; 95.0%</td></tr>
+  <tr><th>64</th><td>ACT-176</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>90.29</td><td>100.0</td><td>YES</td><td>identity 90.3% &lt; 95.0%</td></tr>
+  <tr><th>65</th><td>MIR-32</td><td>monobactam; cephalosporin</td><td>89.24</td><td>100.0</td><td>YES</td><td>identity 89.2% &lt; 95.0%</td></tr>
+  <tr><th>66</th><td>MIR-24</td><td>monobactam; cephalosporin</td><td>89.24</td><td>100.0</td><td>YES</td><td>identity 89.2% &lt; 95.0%</td></tr>
+  <tr><th>67</th><td>MIR-28</td><td>monobactam; cephalosporin</td><td>89.24</td><td>100.0</td><td>YES</td><td>identity 89.2% &lt; 95.0%</td></tr>
+  <tr><th>68</th><td>MIR-35</td><td>monobactam; cephalosporin</td><td>88.98</td><td>100.0</td><td>YES</td><td>identity 89.0% &lt; 95.0%</td></tr>
+  <tr><th>69</th><td>MIR-31</td><td>monobactam; cephalosporin</td><td>88.71</td><td>100.0</td><td>YES</td><td>identity 88.7% &lt; 95.0%</td></tr>
+  <tr><th>70</th><td>ACT-78</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>88.45</td><td>100.0</td><td>YES</td><td>identity 88.5% &lt; 95.0%</td></tr>
+  <tr><th>71</th><td>MIR-33</td><td>monobactam; cephalosporin</td><td>88.98</td><td>100.0</td><td>YES</td><td>identity 89.0% &lt; 95.0%</td></tr>
+  <tr><th>72</th><td>ACT-188</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>88.45</td><td>100.0</td><td>YES</td><td>identity 88.5% &lt; 95.0%</td></tr>
+  <tr><th>73</th><td>MIR-34</td><td>monobactam; cephalosporin</td><td>88.98</td><td>100.0</td><td>YES</td><td>identity 89.0% &lt; 95.0%</td></tr>
+  <tr><th>74</th><td>ACT-153</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>88.19</td><td>100.0</td><td>YES</td><td>identity 88.2% &lt; 95.0%</td></tr>
+  <tr><th>75</th><td>ACT-146</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>88.19</td><td>100.0</td><td>YES</td><td>identity 88.2% &lt; 95.0%</td></tr>
+  <tr><th>76</th><td>ACT-77</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>88.19</td><td>100.0</td><td>YES</td><td>identity 88.2% &lt; 95.0%</td></tr>
+  <tr><th>77</th><td>MIR-25</td><td>monobactam; cephalosporin</td><td>88.71</td><td>100.0</td><td>YES</td><td>identity 88.7% &lt; 95.0%</td></tr>
+  <tr><th>78</th><td>ACT-172</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>88.19</td><td>100.0</td><td>YES</td><td>identity 88.2% &lt; 95.0%</td></tr>
+  <tr><th>79</th><td>ACT-165</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>88.19</td><td>100.0</td><td>YES</td><td>identity 88.2% &lt; 95.0%</td></tr>
+  <tr><th>80</th><td>ACT-160</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>88.19</td><td>100.0</td><td>YES</td><td>identity 88.2% &lt; 95.0%</td></tr>
+  <tr><th>81</th><td>ACT-80</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>88.19</td><td>100.0</td><td>YES</td><td>identity 88.2% &lt; 95.0%</td></tr>
+  <tr><th>82</th><td>ACT-29</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>87.93</td><td>100.0</td><td>YES</td><td>identity 87.9% &lt; 95.0%</td></tr>
+  <tr><th>83</th><td>MIR-30</td><td>monobactam; cephalosporin</td><td>88.71</td><td>100.0</td><td>YES</td><td>identity 88.7% &lt; 95.0%</td></tr>
+  <tr><th>84</th><td>ACT-111</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>88.71</td><td>100.0</td><td>YES</td><td>identity 88.7% &lt; 95.0%</td></tr>
+  <tr><th>85</th><td>ACT-82</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>88.19</td><td>100.0</td><td>YES</td><td>identity 88.2% &lt; 95.0%</td></tr>
+  <tr><th>86</th><td>MIR-27</td><td>monobactam; cephalosporin</td><td>88.71</td><td>100.0</td><td>YES</td><td>identity 88.7% &lt; 95.0%</td></tr>
+  <tr><th>87</th><td>ACT-81</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>87.93</td><td>100.0</td><td>YES</td><td>identity 87.9% &lt; 95.0%</td></tr>
+  <tr><th>88</th><td>ACT-145</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>87.66</td><td>100.0</td><td>YES</td><td>identity 87.7% &lt; 95.0%</td></tr>
+  <tr><th>89</th><td>ACT-49</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>87.93</td><td>100.0</td><td>YES</td><td>identity 87.9% &lt; 95.0%</td></tr>
+  <tr><th>90</th><td>ACT-6</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>87.93</td><td>100.0</td><td>YES</td><td>identity 87.9% &lt; 95.0%</td></tr>
+  <tr><th>91</th><td>ACT-168</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>88.45</td><td>100.0</td><td>YES</td><td>identity 88.5% &lt; 95.0%</td></tr>
+  <tr><th>92</th><td>ACT-170</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>87.66</td><td>100.0</td><td>YES</td><td>identity 87.7% &lt; 95.0%</td></tr>
+  <tr><th>93</th><td>ACT-116</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>87.66</td><td>100.0</td><td>YES</td><td>identity 87.7% &lt; 95.0%</td></tr>
+  <tr><th>94</th><td>ACT-62</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>88.19</td><td>100.0</td><td>YES</td><td>identity 88.2% &lt; 95.0%</td></tr>
+  <tr><th>95</th><td>ACT-182</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>87.4</td><td>100.0</td><td>YES</td><td>identity 87.4% &lt; 95.0%</td></tr>
+  <tr><th>96</th><td>ACT-76</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>87.66</td><td>100.0</td><td>YES</td><td>identity 87.7% &lt; 95.0%</td></tr>
+  <tr><th>97</th><td>ACT-156</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>87.14</td><td>100.0</td><td>YES</td><td>identity 87.1% &lt; 95.0%</td></tr>
+  <tr><th>98</th><td>ACT-54</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>87.4</td><td>100.0</td><td>YES</td><td>identity 87.4% &lt; 95.0%</td></tr>
+  <tr><th>99</th><td>ACT-140</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>87.4</td><td>100.0</td><td>YES</td><td>identity 87.4% &lt; 95.0%</td></tr>
+  <tr><th>100</th><td>ACT-131</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>87.14</td><td>100.0</td><td>YES</td><td>identity 87.1% &lt; 95.0%</td></tr>
+  <tr><th>101</th><td>ACT-22</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>87.4</td><td>100.0</td><td>YES</td><td>identity 87.4% &lt; 95.0%</td></tr>
+  <tr><th>102</th><td>ACT-175</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>87.66</td><td>100.0</td><td>YES</td><td>identity 87.7% &lt; 95.0%</td></tr>
+  <tr><th>103</th><td>ACT-117</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>87.4</td><td>100.0</td><td>YES</td><td>identity 87.4% &lt; 95.0%</td></tr>
+  <tr><th>104</th><td>ACT-4</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>87.89</td><td>100.0</td><td>YES</td><td>identity 87.9% &lt; 95.0%</td></tr>
+  <tr><th>105</th><td>ACT-159</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>87.66</td><td>100.0</td><td>YES</td><td>identity 87.7% &lt; 95.0%</td></tr>
+  <tr><th>106</th><td>ACT-91</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>88.19</td><td>100.0</td><td>YES</td><td>identity 88.2% &lt; 95.0%</td></tr>
+  <tr><th>107</th><td>ACT-109</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>87.14</td><td>100.0</td><td>YES</td><td>identity 87.1% &lt; 95.0%</td></tr>
+  <tr><th>108</th><td>ACT-12</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>87.14</td><td>100.0</td><td>YES</td><td>identity 87.1% &lt; 95.0%</td></tr>
+  <tr><th>109</th><td>ACT-93</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.88</td><td>100.0</td><td>YES</td><td>identity 86.9% &lt; 95.0%</td></tr>
+  <tr><th>110</th><td>ACT-167</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>87.4</td><td>100.0</td><td>YES</td><td>identity 87.4% &lt; 95.0%</td></tr>
+  <tr><th>111</th><td>ACT-13</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>87.11</td><td>100.0</td><td>YES</td><td>identity 87.1% &lt; 95.0%</td></tr>
+  <tr><th>112</th><td>ACT-38</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>87.4</td><td>100.0</td><td>YES</td><td>identity 87.4% &lt; 95.0%</td></tr>
+  <tr><th>113</th><td>ACT-166</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.88</td><td>100.0</td><td>YES</td><td>identity 86.9% &lt; 95.0%</td></tr>
+  <tr><th>114</th><td>ACT-92</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.88</td><td>100.0</td><td>YES</td><td>identity 86.9% &lt; 95.0%</td></tr>
+  <tr><th>115</th><td>ACT-187</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>87.93</td><td>100.0</td><td>YES</td><td>identity 87.9% &lt; 95.0%</td></tr>
+  <tr><th>116</th><td>ACT-118</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.35</td><td>100.0</td><td>YES</td><td>identity 86.3% &lt; 95.0%</td></tr>
+  <tr><th>117</th><td>ACT-173</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>87.37</td><td>100.0</td><td>YES</td><td>identity 87.4% &lt; 95.0%</td></tr>
+  <tr><th>118</th><td>ACT-112</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.61</td><td>100.0</td><td>YES</td><td>identity 86.6% &lt; 95.0%</td></tr>
+  <tr><th>119</th><td>ACT-8</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.84</td><td>100.0</td><td>YES</td><td>identity 86.8% &lt; 95.0%</td></tr>
+  <tr><th>120</th><td>ACT-97</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.88</td><td>100.0</td><td>YES</td><td>identity 86.9% &lt; 95.0%</td></tr>
+  <tr><th>121</th><td>ACT-88</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.61</td><td>100.0</td><td>YES</td><td>identity 86.6% &lt; 95.0%</td></tr>
+  <tr><th>122</th><td>ACT-177</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.58</td><td>100.0</td><td>YES</td><td>identity 86.6% &lt; 95.0%</td></tr>
+  <tr><th>123</th><td>ACT-95</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.09</td><td>100.0</td><td>YES</td><td>identity 86.1% &lt; 95.0%</td></tr>
+  <tr><th>124</th><td>ACT-96</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>85.83</td><td>100.0</td><td>YES</td><td>identity 85.8% &lt; 95.0%</td></tr>
+  <tr><th>125</th><td>ACT-101</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.09</td><td>100.0</td><td>YES</td><td>identity 86.1% &lt; 95.0%</td></tr>
+  <tr><th>126</th><td>ACT-105</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.32</td><td>100.0</td><td>YES</td><td>identity 86.3% &lt; 95.0%</td></tr>
+  <tr><th>127</th><td>ACT-185</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.61</td><td>100.0</td><td>YES</td><td>identity 86.6% &lt; 95.0%</td></tr>
+  <tr><th>128</th><td>ACT-150</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.61</td><td>100.0</td><td>YES</td><td>identity 86.6% &lt; 95.0%</td></tr>
+  <tr><th>129</th><td>ACT-121</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.61</td><td>100.0</td><td>YES</td><td>identity 86.6% &lt; 95.0%</td></tr>
+  <tr><th>130</th><td>ACT-100</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.35</td><td>100.0</td><td>YES</td><td>identity 86.3% &lt; 95.0%</td></tr>
+  <tr><th>131</th><td>ACT-98</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.61</td><td>100.0</td><td>YES</td><td>identity 86.6% &lt; 95.0%</td></tr>
+  <tr><th>132</th><td>ACT-169</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.35</td><td>100.0</td><td>YES</td><td>identity 86.3% &lt; 95.0%</td></tr>
+  <tr><th>133</th><td>ACT-103</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.09</td><td>100.0</td><td>YES</td><td>identity 86.1% &lt; 95.0%</td></tr>
+  <tr><th>134</th><td>ACT-181</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.35</td><td>100.0</td><td>YES</td><td>identity 86.3% &lt; 95.0%</td></tr>
+  <tr><th>135</th><td>ACT-154</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.09</td><td>100.0</td><td>YES</td><td>identity 86.1% &lt; 95.0%</td></tr>
+  <tr><th>136</th><td>ACT-110</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.35</td><td>100.0</td><td>YES</td><td>identity 86.3% &lt; 95.0%</td></tr>
+  <tr><th>137</th><td>ACT-102</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>85.83</td><td>100.0</td><td>YES</td><td>identity 85.8% &lt; 95.0%</td></tr>
+  <tr><th>138</th><td>ACT-104</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.35</td><td>100.0</td><td>YES</td><td>identity 86.3% &lt; 95.0%</td></tr>
+  <tr><th>139</th><td>ACT-143</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>85.56</td><td>100.0</td><td>YES</td><td>identity 85.6% &lt; 95.0%</td></tr>
+  <tr><th>140</th><td>ACT-142</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.35</td><td>100.0</td><td>YES</td><td>identity 86.3% &lt; 95.0%</td></tr>
+  <tr><th>141</th><td>ACT-120</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.35</td><td>100.0</td><td>YES</td><td>identity 86.3% &lt; 95.0%</td></tr>
+  <tr><th>142</th><td>ACT-190</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>85.83</td><td>100.0</td><td>YES</td><td>identity 85.8% &lt; 95.0%</td></tr>
+  <tr><th>143</th><td>ACT-107</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>85.83</td><td>100.0</td><td>YES</td><td>identity 85.8% &lt; 95.0%</td></tr>
+  <tr><th>144</th><td>ACT-99</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>85.83</td><td>100.0</td><td>YES</td><td>identity 85.8% &lt; 95.0%</td></tr>
+  <tr><th>145</th><td>ACT-144</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>84.25</td><td>100.0</td><td>YES</td><td>identity 84.2% &lt; 95.0%</td></tr>
+  <tr><th>146</th><td>ACT-158</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>83.99</td><td>100.0</td><td>YES</td><td>identity 84.0% &lt; 95.0%</td></tr>
+  <tr><th>147</th><td>ACT-108</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>83.73</td><td>100.0</td><td>YES</td><td>identity 83.7% &lt; 95.0%</td></tr>
+  <tr><th>148</th><td>ACT-115</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>83.99</td><td>100.0</td><td>YES</td><td>identity 84.0% &lt; 95.0%</td></tr>
+  <tr><th>149</th><td>ACT-192</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>83.2</td><td>100.0</td><td>YES</td><td>identity 83.2% &lt; 95.0%</td></tr>
+  <tr><th>150</th><td>ACT-189</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>83.46</td><td>100.0</td><td>YES</td><td>identity 83.5% &lt; 95.0%</td></tr>
+  <tr><th>151</th><td>ACT-157</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>83.99</td><td>100.0</td><td>YES</td><td>identity 84.0% &lt; 95.0%</td></tr>
+  <tr><th>152</th><td>ACT-171</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>83.46</td><td>100.0</td><td>YES</td><td>identity 83.5% &lt; 95.0%</td></tr>
+  <tr><th>153</th><td>ACT-151</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>83.46</td><td>100.0</td><td>YES</td><td>identity 83.5% &lt; 95.0%</td></tr>
+  <tr><th>154</th><td>ACT-141</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>83.46</td><td>100.0</td><td>YES</td><td>identity 83.5% &lt; 95.0%</td></tr>
+  <tr><th>155</th><td>ACT-106</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>83.46</td><td>100.0</td><td>YES</td><td>identity 83.5% &lt; 95.0%</td></tr>
+  <tr><th>156</th><td>ACT-90</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>83.2</td><td>100.0</td><td>YES</td><td>identity 83.2% &lt; 95.0%</td></tr>
+  <tr><th>157</th><td>ACT-184</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>83.46</td><td>100.0</td><td>YES</td><td>identity 83.5% &lt; 95.0%</td></tr>
+  <tr><th>158</th><td>ACT-186</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>83.2</td><td>100.0</td><td>YES</td><td>identity 83.2% &lt; 95.0%</td></tr>
+  <tr><th>159</th><td>ACT-155</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>83.73</td><td>100.0</td><td>YES</td><td>identity 83.7% &lt; 95.0%</td></tr>
+  <tr><th>160</th><td>ACT-123</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>83.2</td><td>100.0</td><td>YES</td><td>identity 83.2% &lt; 95.0%</td></tr>
+  <tr><th>161</th><td>ACT-194</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>83.2</td><td>100.0</td><td>YES</td><td>identity 83.2% &lt; 95.0%</td></tr>
+  <tr><th>162</th><td>ACT-148</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>83.2</td><td>100.0</td><td>YES</td><td>identity 83.2% &lt; 95.0%</td></tr>
+  <tr><th>163</th><td>ACT-183</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>82.94</td><td>100.0</td><td>YES</td><td>identity 82.9% &lt; 95.0%</td></tr>
+  <tr><th>164</th><td>ACT-124</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>82.41</td><td>100.0</td><td>YES</td><td>identity 82.4% &lt; 95.0%</td></tr>
+  <tr><th>165</th><td>ACT-122</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>82.94</td><td>100.0</td><td>YES</td><td>identity 82.9% &lt; 95.0%</td></tr>
+  <tr><th>166</th><td>ACT-94</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>83.2</td><td>100.0</td><td>YES</td><td>identity 83.2% &lt; 95.0%</td></tr>
+  <tr><th>167</th><td>ACT-89</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>82.68</td><td>100.0</td><td>YES</td><td>identity 82.7% &lt; 95.0%</td></tr>
+  <tr><th>168</th><td>ACT-178</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>82.94</td><td>100.0</td><td>YES</td><td>identity 82.9% &lt; 95.0%</td></tr>
+  <tr><th>169</th><td>ACT-174</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>82.94</td><td>100.0</td><td>YES</td><td>identity 82.9% &lt; 95.0%</td></tr>
+  <tr><th>170</th><td>ACT-113</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>82.94</td><td>100.0</td><td>YES</td><td>identity 82.9% &lt; 95.0%</td></tr>
+  <tr><th>171</th><td>ACT-GC1</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>82.81</td><td>100.0</td><td>YES</td><td>identity 82.8% &lt; 95.0%</td></tr>
+  <tr><th>172</th><td>ACT-191</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>82.94</td><td>100.0</td><td>YES</td><td>identity 82.9% &lt; 95.0%</td></tr>
+  <tr><th>173</th><td>ACT-179</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>82.94</td><td>100.0</td><td>YES</td><td>identity 82.9% &lt; 95.0%</td></tr>
+  <tr><th>174</th><td>ACT-86</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>82.94</td><td>100.0</td><td>YES</td><td>identity 82.9% &lt; 95.0%</td></tr>
+  <tr><th>175</th><td>ACT-119</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>82.68</td><td>100.0</td><td>YES</td><td>identity 82.7% &lt; 95.0%</td></tr>
+  <tr><th>176</th><td>ACT-85</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>82.68</td><td>100.0</td><td>YES</td><td>identity 82.7% &lt; 95.0%</td></tr>
+  <tr><th>177</th><td>ACT-162</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.09</td><td>100.0</td><td>YES</td><td>identity 86.1% &lt; 95.0%</td></tr>
+  <tr><th>178</th><td>ACT-161</td><td>carbapenem; cephalosporin; penicillin beta-lactam</td><td>86.09</td><td>100.0</td><td>YES</td><td>identity 86.1% &lt; 95.0%</td></tr>
+  <tr><th>179</th><td>CMY-176</td><td>cephalosporin</td><td>76.38</td><td>100.0</td><td>YES</td><td>identity 76.4% &lt; 95.0%</td></tr>
+  <tr><th>180</th><td>CMY-183</td><td>cephalosporin</td><td>76.12</td><td>100.0</td><td>YES</td><td>identity 76.1% &lt; 95.0%</td></tr>
+  <tr><th>181</th><td>CMY-132</td><td>cephalosporin</td><td>75.85</td><td>100.0</td><td>YES</td><td>identity 75.8% &lt; 95.0%</td></tr>
+  <tr><th>182</th><td>CMY-182</td><td>cephalosporin</td><td>75.33</td><td>100.0</td><td>YES</td><td>identity 75.3% &lt; 95.0%</td></tr>
+  <tr><th>183</th><td>CMY-199</td><td>cephalosporin</td><td>75.59</td><td>100.0</td><td>YES</td><td>identity 75.6% &lt; 95.0%</td></tr>
+  <tr><th>184</th><td>CMY-198</td><td>cephalosporin</td><td>75.59</td><td>100.0</td><td>YES</td><td>identity 75.6% &lt; 95.0%</td></tr>
+  <tr><th>185</th><td>CMY-136</td><td>cephalosporin</td><td>75.59</td><td>100.0</td><td>YES</td><td>identity 75.6% &lt; 95.0%</td></tr>
+  <tr><th>186</th><td>CMY-177</td><td>cephalosporin</td><td>75.59</td><td>100.0</td><td>YES</td><td>identity 75.6% &lt; 95.0%</td></tr>
+  <tr><th>187</th><td>CMY-196</td><td>cephalosporin</td><td>75.33</td><td>100.0</td><td>YES</td><td>identity 75.3% &lt; 95.0%</td></tr>
+  <tr><th>188</th><td>CMY-181</td><td>cephalosporin</td><td>74.54</td><td>100.0</td><td>YES</td><td>identity 74.5% &lt; 95.0%</td></tr>
+  <tr><th>189</th><td>CMY-175</td><td>cephalosporin</td><td>75.59</td><td>100.0</td><td>YES</td><td>identity 75.6% &lt; 95.0%</td></tr>
+  <tr><th>190</th><td>CMY-191</td><td>cephalosporin</td><td>75.33</td><td>100.0</td><td>YES</td><td>identity 75.3% &lt; 95.0%</td></tr>
+  <tr><th>191</th><td>CMY-189</td><td>cephalosporin</td><td>74.28</td><td>100.0</td><td>YES</td><td>identity 74.3% &lt; 95.0%</td></tr>
+  <tr><th>192</th><td>CMY-197</td><td>cephalosporin</td><td>75.33</td><td>100.0</td><td>YES</td><td>identity 75.3% &lt; 95.0%</td></tr>
+  <tr><th>193</th><td>CMY-195</td><td>cephalosporin</td><td>75.33</td><td>100.0</td><td>YES</td><td>identity 75.3% &lt; 95.0%</td></tr>
+  <tr><th>194</th><td>CMY-188</td><td>cephalosporin</td><td>74.02</td><td>100.0</td><td>YES</td><td>identity 74.0% &lt; 95.0%</td></tr>
+  <tr><th>195</th><td>CMY-180</td><td>cephalosporin</td><td>74.54</td><td>100.0</td><td>YES</td><td>identity 74.5% &lt; 95.0%</td></tr>
+  <tr><th>196</th><td>CMY-190</td><td>cephalosporin</td><td>74.02</td><td>100.0</td><td>YES</td><td>identity 74.0% &lt; 95.0%</td></tr>
+  <tr><th>197</th><td>CMY-179</td><td>cephalosporin</td><td>74.02</td><td>100.0</td><td>YES</td><td>identity 74.0% &lt; 95.0%</td></tr>
+  <tr><th>198</th><td>CMY-184</td><td>cephalosporin</td><td>75.07</td><td>100.0</td><td>YES</td><td>identity 75.1% &lt; 95.0%</td></tr>
+  <tr><th>199</th><td>CMY-194</td><td>cephalosporin</td><td>75.33</td><td>100.0</td><td>YES</td><td>identity 75.3% &lt; 95.0%</td></tr>
+  <tr><th>200</th><td>CMY-186</td><td>cephalosporin</td><td>75.07</td><td>100.0</td><td>YES</td><td>identity 75.1% &lt; 95.0%</td></tr>
+  <tr><th>201</th><td>CMY-178</td><td>cephalosporin</td><td>75.07</td><td>100.0</td><td>YES</td><td>identity 75.1% &lt; 95.0%</td></tr>
+  <tr><th>202</th><td>CMY-172</td><td>cephalosporin</td><td>74.8</td><td>100.0</td><td>YES</td><td>identity 74.8% &lt; 95.0%</td></tr>
+  <tr><th>203</th><td>SFDC-1</td><td>cephalosporin</td><td>73.23</td><td>100.0</td><td>YES</td><td>identity 73.2% &lt; 95.0%</td></tr>
+  <tr><th>204</th><td>CMY-192</td><td>cephalosporin</td><td>74.03</td><td>100.0</td><td>YES</td><td>identity 74.0% &lt; 95.0%</td></tr>
+  <tr><th>205</th><td>BUT-2</td><td>cephalosporin</td><td>70.23</td><td>100.0</td><td>YES</td><td>identity 70.2% &lt; 95.0%</td></tr>
+  <tr><th>206</th><td>BUT-1</td><td>cephalosporin</td><td>70.23</td><td>100.0</td><td>YES</td><td>identity 70.2% &lt; 95.0%</td></tr>
+  <tr><th>207</th><td>YOC-1</td><td>cephalosporin</td><td>68.83</td><td>100.0</td><td>YES</td><td>identity 68.8% &lt; 95.0%</td></tr>
+  <tr><th>208</th><td>FosA2</td><td>phosphonic acid antibiotic</td><td>95.74</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>209</th><td>FosA8</td><td>phosphonic acid antibiotic</td><td>78.72</td><td>100.0</td><td>YES</td><td>identity 78.7% &lt; 95.0%</td></tr>
+  <tr><th>210</th><td>fosA5</td><td>fluoroquinolone antibiotic; aminoglycoside antibiotic; phosphonic acid antibiotic</td><td>71.22</td><td>100.0</td><td>YES</td><td>identity 71.2% &lt; 95.0%</td></tr>
+  <tr><th>211</th><td>FosA3</td><td>phosphonic acid antibiotic</td><td>69.85</td><td>100.0</td><td>YES</td><td>identity 69.8% &lt; 95.0%</td></tr>
+  <tr><th>212</th><td>FosA4</td><td>phosphonic acid antibiotic</td><td>68.38</td><td>100.0</td><td>YES</td><td>identity 68.4% &lt; 95.0%</td></tr>
+  <tr><th>213</th><td>Escherichia coli UhpT with mutation conferring resistance to fosfomycin</td><td>phosphonic acid antibiotic</td><td>93.74</td><td>100.0</td><td>YES</td><td>identity 93.7% &lt; 95.0%</td></tr>
+  <tr><th>214</th><td>Haemophilus influenzae PBP3 conferring resistance to beta-lactam antibiotics</td><td>cephalosporin; penicillin beta-lactam</td><td>52.57</td><td>96.39</td><td>YES</td><td>identity 52.6% &lt; 95.0%</td></tr>
+  <tr><th>215</th><td>Haemophilus influenzae PBP3 conferring resistance to beta-lactam antibiotics</td><td>cephalosporin; penicillin beta-lactam</td><td>52.57</td><td>96.39</td><td>YES</td><td>identity 52.6% &lt; 95.0%</td></tr>
+  <tr><th>216</th><td>Escherichia coli cyaA with mutation conferring resistance to fosfomycin</td><td>phosphonic acid antibiotic</td><td>93.87</td><td>99.88</td><td>YES</td><td>identity 93.9% &lt; 95.0%</td></tr>
+  <tr><th>217</th><td>baeR</td><td>aminoglycoside antibiotic; aminocoumarin antibiotic</td><td>99.58</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>218</th><td>baeS</td><td>aminoglycoside antibiotic; aminocoumarin antibiotic</td><td>97.86</td><td>100.0</td><td>NO</td><td>PASS</td></tr>
+  <tr><th>219</th><td>Escherichia coli AcrAB-TolC with MarR mutations conferring resistance to ciprofloxacin and tetracycline</td><td>fluoroquinolone antibiotic; cephalosporin; glycylcycline; penicillin beta-lactam; tetracycline antibiotic; rifamycin antibiotic; phenicol antibiotic; disinfecting agents and antiseptics</td><td>86.81</td><td>100.0</td><td>YES</td><td>identity 86.8% &lt; 95.0%</td></tr>
+  <tr><th>220</th><td>Escherichia coli soxS with mutation conferring antibiotic resistance</td><td>fluoroquinolone antibiotic; monobactam; carbapenem; cephalosporin; glycylcycline; penicillin beta-lactam; tetracycline antibiotic; rifamycin antibiotic; phenicol antibiotic; disinfecting agents and antiseptics</td><td>89.72</td><td>100.93</td><td>YES</td><td>identity 89.7% &lt; 95.0%</td></tr>
+</table>
+    </div>
+
+  </div>
+
+</div>
+
+</body>
+</html>

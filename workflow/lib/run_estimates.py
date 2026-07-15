@@ -46,20 +46,37 @@ THE SCALE
 
 The shape comes from the pipeline; the scale comes from this instance. Every
 successful run divides what it actually took by what this model predicted it would
-take, and stores the ratio. The estimate is that baseline times the median of the
-recent ratios -- the median rather than the mean so that one BV-BRC outage that
-stretched a run to six hours does not poison every estimate after it. A fresh
-instance has no ratios and trusts the model as written (a factor of 1.0).
+take, and stores the ratio. The estimate is that baseline times a correction learned
+from those ratios. A fresh instance has no ratios and trusts the model as written (a
+factor of 1.0).
+
+The correction is learned in two stages, because a few runs and forty runs support
+very different claims:
+
+  thin history    the median of the recent ratios -- the median rather than the mean
+                  so that one BV-BRC outage that stretched a run to six hours does
+                  not poison every estimate after it. One number for every run,
+                  whatever its shape.
+  enough history  a small network (lib/run_estimate_net.py) that predicts the ratio
+                  from the run's shape, so that a 1-sample cold run and a 40-sample
+                  re-run can be wrong in different directions rather than sharing one
+                  average. It trains on the same ratios, its output is clamped, and
+                  below run_estimate_net.MIN_TRAIN_RUNS it declines to answer at all
+                  and this falls back to the median. See ``correction_for``.
+
+What is *not* learned is the shape. ceil(N / in_flight) is what a pool of twelve
+slots does, and dividing core-seconds by cores is what cores are for; a network made
+to rediscover that from a few dozen runs would learn it worse than it is already
+known, and would have nothing to say about a run size it had never seen. The
+arithmetic scales; the network only says how wrong the arithmetic tends to be here.
 
 The two constants below are measured, from a real 48-sample run, and the numbers
 that produced them are recorded next to each. They were guesses once -- anchored on
 the README rather than on anything the pipeline had been observed to do -- and the
 local one was six times too big, which is how a five-hour batch came to be quoted at
-thirty. Re-measure them; do not re-guess them.
-
-Note that this is a model, not a learned one. The shape is arithmetic about pools
-and cores, not a pattern to be discovered from data: ceil(N / in_flight) is what a
-pool of twelve slots *does*. Only the scale is learned, and it is one number.
+thirty. Re-measure them; do not re-guess them. The network corrects a scale error; it
+does not excuse one, and a constant left wrong is a constant the network has to spend
+its small capacity apologising for.
 
 THE WORK IS TWO NUMBERS, NOT ONE
 
@@ -90,7 +107,7 @@ import os
 import statistics
 import time
 
-from workflow.lib import jobs
+from workflow.lib import jobs, run_estimate_net
 
 
 # What one sample costs at BV-BRC: the Similar Genome Finder, then the
@@ -178,6 +195,12 @@ SAMPLE_ASSEMBLY_OUTPUTS = (
 # file's identity and mtime, so a write still takes effect immediately.
 _cached_history_key = None
 _cached_history = []
+
+# The trained network, cached on the same key for the same reason -- see
+# ``_correction_model``. Held separately from the history because a fit can fail
+# (or be declined, while the history is thin) without the history being unusable.
+_cached_net_key = object()
+_cached_net = None
 
 
 def assembly_rounds(sample_count, bvbrc_in_flight):
@@ -281,19 +304,83 @@ def _read_history():
 
 def calibration():
 	"""How wrong the model has been on this instance, as a multiplier. 1.0 until a
-	run has finished here and said otherwise."""
+	run has finished here and said otherwise.
+
+	The flat answer: one number for every run, whatever its shape. It is what the
+	estimate uses until there is enough history to fit the network that replaces
+	it (see ``correction_for`` and lib/run_estimate_net.py), and what it falls
+	back to if that fit is ever unavailable."""
 	history = _read_history()
 	if not history:
 		return 1.0
 	return float(statistics.median(entry["factor"] for entry in history))
 
 
+def _rounds_for_entry(entry):
+	"""A history entry's rounds of BV-BRC waiting, by the same arithmetic a live
+	estimate uses. Passed to the network so it cannot form its own idea of a round."""
+	return assembly_rounds(
+		entry.get("assemblies", entry.get("samples", 0)),
+		entry.get("bvbrc_in_flight", 1),
+	)
+
+
+def _correction_model():
+	"""The trained network for the current history, or None while the history is
+	too thin to fit one.
+
+	Cached on the same key as the history itself: a status-page poll estimates
+	every running job and every job ahead of every queued one, and each of those
+	is a call through here. Training is milliseconds, but it is not free, and
+	doing it per job per poll per open tab would be. A write to the history moves
+	the key, so a finished run retrains on the next poll rather than at some later
+	time of the cache's choosing."""
+	global _cached_net_key, _cached_net
+	history = _read_history()
+	if _cached_net_key == _cached_history_key:
+		return _cached_net
+	try:
+		model = run_estimate_net.train_from_history(history, _rounds_for_entry)
+	except Exception as exception:
+		# An estimate is a nicety. A network that will not fit must never be able
+		# to take the status page down with it -- fall back to the median.
+		print(f"[pipeline] could not fit run-estimate network: {exception}")
+		model = None
+	_cached_net, _cached_net_key = model, _cached_history_key
+	return model
+
+
+def correction_for(sample_count, bvbrc_in_flight, cores, assembly_count):
+	"""The multiplier this instance's history puts on the arithmetic model, for a
+	run of this particular shape.
+
+	The network when there is enough history to have fitted one, the flat median
+	otherwise. Unlike the median, this can answer differently for a 1-sample cold
+	run and a 40-sample re-run, which are not equally wrong in the same direction."""
+	model = _correction_model()
+	if model is None:
+		return calibration()
+	return model.correction(
+		sample_count,
+		assembly_count,
+		bvbrc_in_flight,
+		cores,
+		assembly_rounds(assembly_count, bvbrc_in_flight),
+	)
+
+
 def estimate_seconds(sample_count, bvbrc_in_flight, cores, assembly_count=None):
 	"""Estimated wall-clock seconds for a run of ``sample_count`` samples."""
-	return baseline_seconds(sample_count, bvbrc_in_flight, cores, assembly_count) * calibration()
+	baseline = baseline_seconds(sample_count, bvbrc_in_flight, cores, assembly_count)
+	if not baseline:
+		return 0.0
+	if assembly_count is None:
+		assembly_count = sample_count
+	assembly_count = min(max(0, assembly_count), max(0, sample_count))
+	return baseline * correction_for(sample_count, bvbrc_in_flight, cores, assembly_count)
 
 
-def record(sample_count, bvbrc_in_flight, cores, seconds, assembly_count=None):
+def record(sample_count, bvbrc_in_flight, cores, seconds, assembly_count=None, queue_seconds=None):
 	"""Fold one finished run into the history. Only successful runs belong here:
 	a crash or an abort says nothing about how long the work takes.
 
@@ -303,9 +390,19 @@ def record(sample_count, bvbrc_in_flight, cores, seconds, assembly_count=None):
 	assemblies already on disk -- charge either against a full cold run and the
 	history learns that the pipeline is several times faster than it is.
 
-	What is stored is a ratio, not a duration, so that runs of different sizes can
-	be compared at all: a one-sample run and a ten-sample run are both evidence
-	about the same instance, and the ratio is what they have in common."""
+	``seconds`` is the runtime -- the process wall clock -- and ``queue_seconds`` the
+	wait for a slot before it. Two separate numbers because they answer to two
+	different things: the runtime is what the pipeline cost, and the wait is what the
+	instance's own contention cost, which depends on how many other jobs were ahead
+	and nothing about this one's work. So the wait is recorded but kept out of the
+	``factor`` below -- fold it in and the same job would look several times more
+	expensive on a busy box than an idle one, which is the one thing the factor must
+	not learn. ``queue_seconds`` is None when it could not be measured (see
+	pipeline_manager._record_duration), and stored as such rather than as a false zero.
+
+	What is stored for the estimate is a ratio, not a duration, so that runs of
+	different sizes can be compared at all: a one-sample run and a ten-sample run are
+	both evidence about the same instance, and the ratio is what they have in common."""
 	baseline = baseline_seconds(sample_count, bvbrc_in_flight, cores, assembly_count)
 	if not baseline or seconds is None or seconds < MINIMUM_RECORDED_SECONDS:
 		return
@@ -317,6 +414,7 @@ def record(sample_count, bvbrc_in_flight, cores, seconds, assembly_count=None):
 		"bvbrc_in_flight": bvbrc_in_flight,
 		"cores": cores,
 		"seconds": round(float(seconds), 1),
+		"queue_seconds": None if queue_seconds is None else round(float(queue_seconds), 1),
 		"baseline_seconds": baseline,
 		"factor": float(seconds) / baseline,
 	}

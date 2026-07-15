@@ -21,6 +21,7 @@ app -- while everything submitted meanwhile queues to disk instead of starting, 
 resumes by itself on the other side.
 """
 
+import json
 import subprocess
 import sys
 import time
@@ -31,7 +32,7 @@ from unittest import mock
 from tests._isolation import TMP_ROOT, REAL_ROOT  # noqa: F401  (must import first)
 
 import frontend  # noqa: E402
-from workflow.lib import cloud_import, jobs, run_estimates  # noqa: E402
+from workflow.lib import cloud_import, jobs, run_estimate_net, run_estimates  # noqa: E402
 
 from tests.test_batching import Base, token_for, _REAL_POPEN  # noqa: E402
 from tests.test_cloud_import import FakeDrive, SHARED_FOLDER, fastq_bytes, md5, stats_workbook  # noqa: E402
@@ -342,6 +343,156 @@ class NormalUserFlow(Base):
 		self.assertAlmostEqual(
 			self.client.get(f"/status?job_id={next_job}").get_json()["estimated_seconds"], 3000
 		)
+
+	def record_runs(self, shapes):
+		"""Write a history by hand, one entry per (samples, assemblies, factor).
+
+		By hand because the runs a test can actually perform finish in milliseconds,
+		which is the length ``record`` throws away -- and because a test about what
+		the history teaches needs to say what is in it."""
+		jobs.run_history_path().unlink(missing_ok=True)
+		self.addCleanup(jobs.run_history_path().unlink, missing_ok=True)
+		in_flight, cores = frontend.BVBRC_MAX_IN_FLIGHT, frontend.PIPELINE_CORES
+		for samples, assemblies, factor in shapes:
+			baseline = run_estimates.baseline_seconds(samples, in_flight, cores, assemblies)
+			run_estimates.record(
+				samples, in_flight, cores, baseline * factor, assembly_count=assemblies
+			)
+
+	def test_the_network_stays_out_of_the_way_until_it_has_runs_to_learn_from(self):
+		"""Most of a run's length is BV-BRC's queue, which is not ours to predict, and
+		a network fitted to three runs of it does not estimate -- it memorises. So
+		below MIN_TRAIN_RUNS it declines to answer and the estimate is the median it
+		always was. A new instance must not get *worse* estimates for having grown the
+		capacity to learn better ones."""
+		in_flight, cores = frontend.BVBRC_MAX_IN_FLIGHT, frontend.PIPELINE_CORES
+		self.record_runs([(1, 1, 0.5)] * (run_estimate_net.MIN_TRAIN_RUNS - 1))
+
+		self.assertIsNone(run_estimates._correction_model())
+		self.assertAlmostEqual(
+			run_estimates.correction_for(1, in_flight, cores, 1), run_estimates.calibration()
+		)
+
+		# One more run is the threshold, and now there is something to fit.
+		self.record_runs([(1, 1, 0.5)] * run_estimate_net.MIN_TRAIN_RUNS)
+		self.assertIsNotNone(run_estimates._correction_model())
+
+	def test_the_network_learns_what_one_median_cannot_say(self):
+		"""A re-run that already holds its assemblies owes BV-BRC nothing, so it lands
+		much closer to the arithmetic than a cold run of the same size does. One median
+		has to split the difference and be wrong about both. The network is given the
+		shape of the run, so it can be right about each.
+
+		The history here says exactly that: cold runs come in at half the model's
+		price, re-runs at very nearly it."""
+		in_flight, cores = frontend.BVBRC_MAX_IN_FLIGHT, frontend.PIPELINE_CORES
+		self.record_runs(
+			[(samples, samples, 0.5) for samples in (1, 2, 4, 8, 12, 24)]
+			+ [(samples, 0, 1.0) for samples in (1, 2, 4, 8, 12, 24)]
+		)
+
+		cold = run_estimates.correction_for(8, in_flight, cores, 8)
+		rerun = run_estimates.correction_for(8, in_flight, cores, 0)
+		self.assertGreater(rerun, cold * 1.25)
+		self.assertAlmostEqual(cold, 0.5, delta=0.15)
+		self.assertAlmostEqual(rerun, 1.0, delta=0.2)
+
+	def test_two_workers_estimate_the_same_run_identically(self):
+		"""Gunicorn runs several workers and the page polls whichever answers. If two
+		of them fitted the same history and disagreed, a countdown would jump about as
+		polls landed on different ones, and the user would end up watching the estimate
+		rather than the run. Training is seeded and full-batch precisely so it cannot."""
+		in_flight, cores = frontend.BVBRC_MAX_IN_FLIGHT, frontend.PIPELINE_CORES
+		self.record_runs([(samples, samples, 0.4 + samples / 100) for samples in range(1, 13)])
+
+		estimates = []
+		for _ in range(3):
+			# What a worker that has never seen this history starts from.
+			run_estimates._cached_net_key = object()
+			run_estimates._cached_net = None
+			estimates.append(run_estimates.estimate_seconds(6, in_flight, cores, 3))
+		self.assertEqual(len(set(estimates)), 1)
+
+	def test_a_wild_history_cannot_make_the_estimate_absurd(self):
+		"""A BV-BRC outage, or a box that was thrashing, can leave runs in the history
+		that took twenty times what they should. The network is allowed to learn that
+		this instance is slow; it is not allowed to quote the next run at twenty times
+		the arithmetic on the strength of it. Beyond CORRECTION_LIMITS the arithmetic
+		itself is what is wrong, and that is a thing to go and fix rather than to paper
+		over here."""
+		in_flight, cores = frontend.BVBRC_MAX_IN_FLIGHT, frontend.PIPELINE_CORES
+		lower, upper = run_estimate_net.CORRECTION_LIMITS
+
+		self.record_runs([(4, 4, 50.0)] * run_estimate_net.MIN_TRAIN_RUNS)
+		self.assertLessEqual(run_estimates.correction_for(4, in_flight, cores, 4), upper)
+
+		self.record_runs([(4, 4, 0.001)] * run_estimate_net.MIN_TRAIN_RUNS)
+		self.assertGreaterEqual(run_estimates.correction_for(4, in_flight, cores, 4), lower)
+
+	def test_admission_records_when_a_run_began_waiting_for_a_slot(self):
+		"""Queue time is measured from admission, so admission has to be written down --
+		and written to disk, since a queued job can outlive the restart that will
+		eventually start it. For a run that takes a free slot at once, that moment is
+		essentially its start: a wait of nothing."""
+		manager = frontend._pipeline_manager
+		job_id = self.runnable(self.submit_pair("Q_ADMIT").get_json()["job_id"])
+
+		self.assertIsNone(manager.job_store.read_run_admitted(job_id))
+		self.assertEqual(self.start(job_id).status_code, 200)
+
+		admitted = manager.job_store.read_run_admitted(job_id)
+		started = manager.job_store.read_run_started(job_id)
+		self.assertIsNotNone(admitted)
+		self.assertLessEqual(admitted, started)
+		self.assertLess(started - admitted, 5)
+		self.release(job_id)
+
+	def test_a_run_records_its_queue_time_beside_its_runtime(self):
+		"""Every recorded run carries both what it waited and what it ran. A test run
+		finishes in milliseconds -- below the floor ``record`` keeps -- so a run that
+		waited 40s for a slot and then worked for 100s is staged by hand and recorded
+		through the real ``_record_duration``.
+
+		The two are kept apart on purpose: the wait is contention, not pipeline cost,
+		so it is stored next to the runtime but the ``factor`` every estimate is built
+		on stays the runtime over the baseline, owing nothing to how busy the box was."""
+		self.seed_run_history(seconds_per_run=None)
+		manager = frontend._pipeline_manager
+		job_id = self.runnable(self.submit_pair("Q_REC").get_json()["job_id"])
+
+		now = time.time()
+		jobs.job_results_dir(job_id).mkdir(parents=True, exist_ok=True)
+		jobs.job_run_admitted_path(job_id).write_text(str(now - 140))
+		jobs.job_run_started_path(job_id).write_text(str(now - 100))
+		manager.pending_at_start[job_id] = (1, 1)
+
+		manager._record_duration(job_id)
+
+		entry = json.loads(jobs.run_history_path().read_text())[-1]
+		self.assertAlmostEqual(entry["queue_seconds"], 40, delta=3)
+		self.assertAlmostEqual(entry["seconds"], 100, delta=3)
+		# The factor is the runtime over the baseline, not the runtime plus the wait:
+		# had the 40s wait leaked into it, this would be off by nearly half.
+		self.assertAlmostEqual(entry["factor"], entry["seconds"] / entry["baseline_seconds"], places=3)
+		self.assertLess(entry["factor"], (entry["seconds"] + entry["queue_seconds"]) / entry["baseline_seconds"])
+
+	def test_a_queue_time_that_was_never_measured_is_stored_as_unknown_not_zero(self):
+		"""A run from before admission was tracked has no wait on record. Unknown is
+		stored as null, not as a zero: a false zero would tell the history the box was
+		idle when nobody knows that it was, and the whole point of separating the wait
+		from the runtime is not to feed the estimate a number it did not earn."""
+		self.seed_run_history(seconds_per_run=None)
+		manager = frontend._pipeline_manager
+		job_id = self.runnable(self.submit_pair("Q_UNKNOWN").get_json()["job_id"])
+
+		jobs.job_results_dir(job_id).mkdir(parents=True, exist_ok=True)
+		jobs.job_run_started_path(job_id).write_text(str(time.time() - 100))
+		manager.pending_at_start[job_id] = (1, 1)
+
+		manager._record_duration(job_id)
+
+		entry = json.loads(jobs.run_history_path().read_text())[-1]
+		self.assertIsNone(entry["queue_seconds"])
 
 	def test_a_rerun_is_measured_by_the_work_it_has_left_not_by_its_manifest(self):
 		"""Re-running is how a user recovers from a failed run, and a re-run keeps

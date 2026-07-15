@@ -93,7 +93,7 @@ class BVBRCClient:
 				self.token = response_data.get("access_token")
 				self.user_id = response_data.get("user_id")
 				if self.token:
-					logger.info(f"Loaded BV-BRC token for user: {self.user_id}")
+					logger.info("Loaded saved BV-BRC token")
 					return True
 		except Exception as exception:
 			logger.warning(f"Failed to load token: {exception}")
@@ -117,7 +117,7 @@ class BVBRCClient:
 			with self.token_file.open("w") as file_handle:
 				json.dump(response_data, file_handle, indent=2)
 			self.token_file.chmod(0o600)  # Restrict file permissions
-			logger.info(f"Saved BV-BRC token for user: {user_id}")
+			logger.info("Saved BV-BRC token")
 			return True
 		except Exception as exception:
 			logger.error(f"Failed to save token: {exception}")
@@ -135,7 +135,7 @@ class BVBRCClient:
 		Returns:
 		    True if authentication successful
 		"""
-		logger.info(f"Authenticating with BV-BRC as {username}...")
+		logger.info("Authenticating with BV-BRC...")
 
 		try:
 			response = requests.post(
@@ -163,7 +163,7 @@ class BVBRCClient:
 			}
 			self.user_id = token_fields.get("un", username)
 			self._save_token(self.token, self.user_id)
-			logger.info(f"✓ Authentication successful for {username}")
+			logger.info("✓ Authentication successful")
 			return True
 
 		except requests.exceptions.HTTPError as exception:

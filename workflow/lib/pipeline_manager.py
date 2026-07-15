@@ -309,6 +309,12 @@ class PipelineManager:
 		started_at = self.job_store.read_run_started(job_id)
 		if started_at is None:
 			return
+		# How long it waited for a slot before that. None when the admission time was
+		# never recorded (a job from before this was tracked), which is left as unknown
+		# rather than written down as a zero wait it may not have had. Clamped at zero
+		# because a clock that stepped backwards is not a negative wait.
+		admitted_at = self.job_store.read_run_admitted(job_id)
+		queue_seconds = None if admitted_at is None else max(0.0, started_at - admitted_at)
 		# What the run worked on, not what the job holds: a re-run that skipped
 		# eight of ten samples came back fast because it did little, and charging
 		# its length to ten samples' worth of work would record the pipeline as a
@@ -322,6 +328,7 @@ class PipelineManager:
 			self.cores,
 			time.time() - started_at,
 			assemblies,
+			queue_seconds=queue_seconds,
 		)
 
 	def is_busy(self, job_id):
@@ -343,6 +350,11 @@ class PipelineManager:
 			if not authenticated():
 				return {"error": "BV-BRC login required: submit your BV-BRC username and password before running"}, 401
 			self.job_store.reset_run_markers(job_id)
+			# The wait for a slot starts now, whether this job takes one immediately or
+			# joins the queue. Written before either branch so ``_record_duration`` can
+			# tell how long it waited; on disk so a restart between here and ``start``
+			# does not lose it.
+			jobs.job_run_admitted_path(job_id).write_text(str(time.time()))
 			draining = self.is_draining()
 			if draining or len(self.processes) >= self.max_concurrent:
 				self.queue.append(job_id)

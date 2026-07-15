@@ -1,0 +1,53 @@
+{
+  "job_id": "3TNCC7UTX9ES",
+  "captured_at": "2026-07-14",
+  "host": {
+    "vcpu": 8,
+    "mem_mb": 15699,
+    "instance": "ec2 us-west-1"
+  },
+  "inputs": {
+    "n_samples": 1,
+    "paired": true,
+    "samples": [
+      {
+        "isolate_id": "SW4E1_S337",
+        "r1_mb": 207.6,
+        "r2_mb": 218.8,
+        "total_mb": 426.4
+      }
+    ],
+    "total_input_mb": 426.4
+  },
+  "upload": {
+    "method": "folder",
+    "seconds": 162.0
+  },
+  "run": {
+    "started_at": 1784037191.7138824,
+    "finished_at": 1784039252.7614486,
+    "wall_seconds": 2061.0,
+    "success": true,
+    "n_steps": 19
+  },
+  "rule_seconds": {
+    "bvbrc_comprehensive_genome_analysis": 1571.0,
+    "bvbrc_similar_genome_finder": 367.0,
+    "card_rgi_analysis": 100.0,
+    "mlst_analysis": 27.0,
+    "bvbrc_upload_reads": 17.0,
+    "mobile_element_finder": 16.0,
+    "blast_ncbi_novelty": 2.0,
+    "fetch_raw_read": 1.0,
+    "validate_fastq": 1.0,
+    "mobile_element_colocation": 1.0,
+    "extract_rgi_proteins": 1.0,
+    "evaluate_novelty": 1.0,
+    "setup_fresh_databases": 0.0,
+    "parse_genome_report": 0.0,
+    "mobile_element_summary": 0.0,
+    "generate_master_report": 0.0,
+    "generate_sample_report": 0.0
+  },
+  "notes": "bvbrc_comprehensive_genome_analysis (1571s) + bvbrc_similar_genome_finder (367s) = 94% of wall. Both are remote BV-BRC queue jobs, so runtime is dominated by remote service latency, not local CPU."
+}
