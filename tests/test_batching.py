@@ -28,6 +28,11 @@ def _fake_popen(argv, **kwargs):
 	return _REAL_POPEN([sys.executable, "-c", "pass"], **kwargs)
 
 
+def _failing_popen(argv, **kwargs):
+	"""A stand-in for snakemake that exits non-zero, i.e. a run that failed."""
+	return _REAL_POPEN([sys.executable, "-c", "import sys; sys.exit(1)"], **kwargs)
+
+
 def token_for(job_id):
 	path = jobs.job_token_path(job_id)
 	path.parent.mkdir(parents=True, exist_ok=True)
@@ -70,6 +75,21 @@ class Base(unittest.TestCase):
 	def isolates(self, job_id):
 		rows, _ = frontend._read_samples(jobs.job_samples_csv(job_id))
 		return sorted(row["isolate_id"] for row in rows)
+
+	def run_to_terminal_status(self, job_id, popen=_fake_popen):
+		"""Run the job with a stubbed snakemake until it records a terminal status."""
+		token_for(job_id)
+		frontend.subprocess.Popen = popen
+		try:
+			self.assertEqual(self.client.post("/run", data={"job_id": job_id}).status_code, 200)
+			deadline = time.time() + 15
+			while time.time() < deadline:
+				if self.client.get(f"/status?job_id={job_id}").get_json().get("done"):
+					return
+				time.sleep(0.05)
+		finally:
+			frontend.subprocess.Popen = _REAL_POPEN
+		self.fail("run did not reach a terminal status in time")
 
 
 # Adding to a job
@@ -154,6 +174,48 @@ class TestMultipleUploadsPerJob(Base):
 		try:
 			self.assertEqual(self.client.post("/run", data={"job_id": job_id}).status_code, 200)
 			response = self.submit_pair("LATE", job_id=job_id)
+			self.assertEqual(response.status_code, 409)
+			self.assertIn("running", response.get_json()["error"].lower())
+		finally:
+			for process in list(frontend._pipeline_processes.values()):
+				process.kill()
+			frontend.subprocess.Popen = _REAL_POPEN
+
+	def test_cannot_add_to_a_job_after_it_has_run(self):
+		job_id = self.submit_pair("DONEADD").get_json()["job_id"]
+		self.run_to_terminal_status(job_id)
+		response = self.submit_pair("TOOLATE", job_id=job_id)
+		self.assertEqual(response.status_code, 409)
+		self.assertIn("already run", response.get_json()["error"].lower())
+		self.assertEqual(self.isolates(job_id), ["DONEADD"])
+
+	def test_a_failed_run_freezes_the_samples_too(self):
+		job_id = self.submit_pair("FAILADD").get_json()["job_id"]
+		self.run_to_terminal_status(job_id, popen=_failing_popen)
+		self.assertEqual(self.submit_pair("TOOLATE", job_id=job_id).status_code, 409)
+		self.assertEqual(self.import_folder(["ALSOLATE"], job_id=job_id).status_code, 409)
+
+	def test_cannot_delete_from_a_job_after_it_has_run(self):
+		job_id = self.submit_pair("DONEDEL").get_json()["job_id"]
+		self.run_to_terminal_status(job_id)
+		response = self.client.delete(
+			"/delete", json={"job_id": job_id, "files": ["DONEDEL_R1_001.fastq.gz"]}
+		)
+		self.assertEqual(response.status_code, 409)
+		# Refused, not half-applied: the manifest row is still there.
+		self.assertEqual(self.isolates(job_id), ["DONEDEL"])
+
+	def test_cannot_delete_from_a_job_while_it_is_running(self):
+		job_id = self.submit_pair("DELBUSY").get_json()["job_id"]
+		token_for(job_id)
+		frontend.subprocess.Popen = lambda argv, **kw: _REAL_POPEN(
+			[sys.executable, "-c", "import time; time.sleep(30)"], **kw
+		)
+		try:
+			self.assertEqual(self.client.post("/run", data={"job_id": job_id}).status_code, 200)
+			response = self.client.delete(
+				"/delete", json={"job_id": job_id, "files": ["DELBUSY_R1_001.fastq.gz"]}
+			)
 			self.assertEqual(response.status_code, 409)
 			self.assertIn("running", response.get_json()["error"].lower())
 		finally:

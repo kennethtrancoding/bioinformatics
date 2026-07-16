@@ -99,14 +99,18 @@ filling the same batch. Once all
 files have arrived, press Run Pipeline.
 
 Re-adding an isolate that is already in the batch replaces its rows rather than
-duplicating them (`updated` in the response, not `added`), so a re-upload to fix
-a bad file is safe.
+duplicating them (`updated` in the response, not `added`), so re-uploading to fix
+a bad file is safe — as long as the pipeline has not been run yet (see below).
 
 Each upload is a read-modify-write of one `samples.csv`, so concurrent adds to
 the same job are serialized on a per-job lock; adds to _different_ jobs never
-block each other. Samples cannot be added to a job while its pipeline is running
-or queued (`409`) — the run reads the manifest and the FASTQ it points at, so
-changing them underneath would either be silently ignored or read half-written.
+block each other. **A job's samples can only be added to or deleted from before
+its pipeline is first run.** Once a run is queued or running, changing the
+manifest or the FASTQ it points at would be silently ignored or read
+half-written; once a run has finished — completed **or** failed — the samples are
+the inputs that produced its results, so editing them would leave results that no
+longer match their inputs. Both `/submit`/`/import` and `/delete` return `409` in
+those states. A different set of files is a different job: start a new one.
 
 ### Timing
 
