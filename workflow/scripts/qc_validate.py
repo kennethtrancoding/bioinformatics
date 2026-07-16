@@ -3,13 +3,13 @@ QC Validation Script (Snakemake rule: validate_fastq)
 Validates FASTQ integrity and generates metadata
 """
 
-import sys
 import json
+import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path.cwd()))
-from workflow.lib.preprocess import validate_sample_files, count_fastq_records
-from workflow.lib.utils import compute_md5
+from workflow.helpers.preprocess import count_fastq_records, validate_sample_files
+from workflow.helpers.utils import compute_md5
 
 first_read_path = snakemake.input.first_read
 second_read_path = snakemake.input.second_read
@@ -52,20 +52,26 @@ if expected:
 			md5_status = "FAIL"
 
 metrics = {
- "sample_id": sample_id,
- "r1_path": first_read_path,
- "r2_path": second_read_path,
- "r1_exists": Path(first_read_path).exists(),
- "r2_exists": Path(second_read_path).exists(),
- "r1_size_bytes": Path(first_read_path).stat().st_size if Path(first_read_path).exists() else 0,
- "r2_size_bytes": Path(second_read_path).stat().st_size if Path(second_read_path).exists() else 0,
- "r1_record_estimate": count_fastq_records(first_read_path) if Path(first_read_path).exists() else 0,
- "r2_record_estimate": count_fastq_records(second_read_path) if Path(second_read_path).exists() else 0,
- "r1_md5": r1_md5,
- "r2_md5": r2_md5,
- "md5_status": md5_status,
- "status": "PASS" if is_valid else "FAIL",
- "errors": errors,
+	"sample_id": sample_id,
+	"r1_path": first_read_path,
+	"r2_path": second_read_path,
+	"r1_exists": Path(first_read_path).exists(),
+	"r2_exists": Path(second_read_path).exists(),
+	"r1_size_bytes": Path(first_read_path).stat().st_size if Path(first_read_path).exists() else 0,
+	"r2_size_bytes": Path(second_read_path).stat().st_size
+	if Path(second_read_path).exists()
+	else 0,
+	"r1_record_estimate": count_fastq_records(first_read_path)
+	if Path(first_read_path).exists()
+	else 0,
+	"r2_record_estimate": count_fastq_records(second_read_path)
+	if Path(second_read_path).exists()
+	else 0,
+	"r1_md5": r1_md5,
+	"r2_md5": r2_md5,
+	"md5_status": md5_status,
+	"status": "PASS" if is_valid else "FAIL",
+	"errors": errors,
 }
 
 with open(report_file, "w") as file_handle:

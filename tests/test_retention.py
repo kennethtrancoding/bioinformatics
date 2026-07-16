@@ -13,7 +13,7 @@ import unittest
 
 import frontend  # noqa: E402
 from tests._isolation import REAL_ROOT  # noqa: F401  (must import first)
-from workflow.lib import jobs  # noqa: E402
+from workflow.helpers import jobs  # noqa: E402
 
 VIEW_TTL = frontend._VIEW_TTL_SECONDS
 MAX_TTL = frontend._MAX_TTL_SECONDS

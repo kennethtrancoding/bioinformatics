@@ -11,8 +11,7 @@ import os
 import time
 from pathlib import Path
 
-from workflow.lib import jobs
-
+from workflow.helpers import jobs
 
 SAMPLE_FIELDS = ["isolate_id", "R1_path", "R2_path", "description"]
 UPLOAD_METHOD_LABELS = {
@@ -51,9 +50,7 @@ class JobStore:
 		samples_csv = jobs.job_samples_csv(job_id)
 		sample_rows, fieldnames = self.read_samples(samples_csv)
 		sample_rows = [
-			sample_row
-			for sample_row in sample_rows
-			if sample_row.get("isolate_id") != isolate_id
+			sample_row for sample_row in sample_rows if sample_row.get("isolate_id") != isolate_id
 		]
 		sample_rows.append(
 			{"isolate_id": isolate_id, "R1_path": r1_path, "R2_path": r2_path, "description": ""}
@@ -65,7 +62,11 @@ class JobStore:
 		sample_rows, fieldnames = self.read_samples(samples_csv)
 		self.write_samples(
 			samples_csv,
-			[sample_row for sample_row in sample_rows if sample_row.get("isolate_id") != isolate_id],
+			[
+				sample_row
+				for sample_row in sample_rows
+				if sample_row.get("isolate_id") != isolate_id
+			],
 			fieldnames,
 		)
 
@@ -89,7 +90,9 @@ class JobStore:
 			uploads_path = jobs.job_uploads_path(job_id)
 			uploads_path.parent.mkdir(parents=True, exist_ok=True)
 			temporary_path = uploads_path.with_suffix(".json.tmp")
-			temporary_path.write_text(json.dumps(self.read_uploads(job_id) + [upload_entry], indent=2))
+			temporary_path.write_text(
+				json.dumps(self.read_uploads(job_id) + [upload_entry], indent=2)
+			)
 			os.replace(temporary_path, uploads_path)
 		except OSError as exception:
 			print(f"[uploads] could not record upload for job {job_id}: {exception}")

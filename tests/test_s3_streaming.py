@@ -17,13 +17,11 @@ import sys
 import unittest
 from unittest import mock
 
-from tests._isolation import REAL_ROOT  # noqa: F401  (must import first)
-
 import frontend  # noqa: E402
-from workflow.lib import jobs, s3_storage  # noqa: E402
-
-from tests.test_batching import Base, token_for, _REAL_POPEN  # noqa: F401,E402
+from tests._isolation import REAL_ROOT  # noqa: F401  (must import first)
+from tests.test_batching import _REAL_POPEN, Base, token_for  # noqa: F401,E402
 from tests.test_cloud_import import fastq_bytes, md5  # noqa: E402
+from workflow.helpers import jobs, s3_storage  # noqa: E402
 
 
 class _FakePaginator:
@@ -247,9 +245,7 @@ class TestWithoutABucketTheLocalCopyIsTheOnlyCopy(Base):
 		job_id = self.submit_pair("NOBUCKET").get_json()["job_id"]
 
 		raw_files = sorted(path.name for path in jobs.job_data_dir(job_id).glob("*.fastq.gz"))
-		self.assertEqual(
-			raw_files, ["NOBUCKET_R1_001.fastq.gz", "NOBUCKET_R2_001.fastq.gz"]
-		)
+		self.assertEqual(raw_files, ["NOBUCKET_R1_001.fastq.gz", "NOBUCKET_R2_001.fastq.gz"])
 
 
 class TestTheExpiryClockNeverEatsReadsAJobNeeds(S3Base):

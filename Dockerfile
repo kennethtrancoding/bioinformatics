@@ -78,8 +78,16 @@ RUN set -eux; \
         --config job_id=IMGBUILD0001 \
                   samples_manifest=config/jobs/IMGBUILD0001/samples.csv \
                   results_dir=results/IMGBUILD0001; \
+    date -u +%Y-%m-%dT%H:%M:%SZ > resources/blastdb/.db_built_at; \
     rm -rf config/jobs/IMGBUILD0001 results/IMGBUILD0001 /tmp/imgbuild; \
     mamba clean -afy
+
+# The frontend reads resources/blastdb/.db_built_at to show "reference databases
+# last updated" (see _reference_databases_updated_at). It is written in the same
+# layer that builds CARD/MGEdb/AMRProt above, so it moves exactly when they do:
+# if that layer is cache-reused, the databases are unchanged and so is the stamp.
+# It sits under resources/blastdb/, which .dockerignore excludes, so the COPY . .
+# below never overwrites it with a developer's local copy.
 
 # The second snakemake call above is not part of the env warm-up: it actually RUNS
 # rule build_amr_blast_db, which downloads NCBI's AMRFinderPlus reference protein

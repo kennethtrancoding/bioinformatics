@@ -8,11 +8,10 @@ import json
 import sys
 from pathlib import Path
 
-
 sys.path.insert(0, str(Path.cwd()))
 
-from workflow.lib.bvbrc_client import BVBRCClient
-from workflow.lib.utils import setup_logger
+from workflow.helpers.bvbrc_client import BVBRCClient
+from workflow.helpers.utils import setup_logger
 
 logger = setup_logger("bvbrc_genus_finder", snakemake.log[0])
 
@@ -52,12 +51,12 @@ try:
 	logger.info(f"Job submitted: {job_id}")
 
 	is_complete, final_status = client.wait_for_job(
-	 job_id, max_wait_seconds=max_wait, poll_interval=poll_interval
+		job_id, max_wait_seconds=max_wait, poll_interval=poll_interval
 	)
 
 	if not is_complete:
-	 # final_status distinguishes a genuine server-side failure ("failed")
-	 # from the client giving up while still queued/in-progress ("timed out").
+		# final_status distinguishes a genuine server-side failure ("failed")
+		# from the client giving up while still queued/in-progress ("timed out").
 		if final_status == "failed":
 			raise RuntimeError("TaxonomicClassification failed server-side on BV-BRC")
 		raise RuntimeError(f"TaxonomicClassification did not complete (status: {final_status})")
@@ -68,8 +67,8 @@ try:
 	kraken_remote = f"{output_folder}/TaxonomicClassification.txt"
 
 	if client.download_file(kraken_remote, kraken_report_file):
-	 # Kraken2 report format: pct, covered, assigned, rank, taxid, name
-	 # rank codes: D=domain, P=phylum, C=class, O=order, F=family, G=genus, S=species
+		# Kraken2 report format: pct, covered, assigned, rank, taxid, name
+		# rank codes: D=domain, P=phylum, C=class, O=order, F=family, G=genus, S=species
 		best_genus = None
 		best_pct = 0.0
 		with open(kraken_report_file) as file_handle:
@@ -104,8 +103,8 @@ except Exception as exception:
 if not Path(kraken_report_file).exists():
 	with open(kraken_report_file, "w") as file_handle:
 		file_handle.write(
-		 f"TaxonomicClassification unavailable for {sample_id}: "
-		 f"job failed or the report could not be downloaded from BV-BRC.\n"
+			f"TaxonomicClassification unavailable for {sample_id}: "
+			f"job failed or the report could not be downloaded from BV-BRC.\n"
 		)
 
 with open(genus_file, "w") as file_handle:

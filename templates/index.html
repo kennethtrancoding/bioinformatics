@@ -43,8 +43,8 @@
 		<fieldset>
 			<h1>Bulk Import</h1>
 			<p>
-				Choose a FASTQ folder directly from the sequencing company. R1/R2 pairs are matched
-				automatically.
+				Choose a FASTA/FASTQ folder directly from the sequencing company. R1/R2 pairs and
+				checksum data are matched automatically.
 			</p>
 			<label for="import-folder">Folder</label>
 			<input type="file" id="import-folder" webkitdirectory multiple />
@@ -73,12 +73,9 @@
 		-->
 
 		<p id="job-banner">
-			Add files using the methods above as many times as needed, then press Run Pipeline.
-			Additions on this page are batched under one job ID. Save it; it's the only way to come
-			back and check on your results later.
-		</p>
-		<p id="job-banner">
-			Raw data is deleted as soon as it's processed, and results are kept for 7 days (or for 3
+			Add files using the methods above, then press Run Pipeline. All files are batched under
+			a job ID. Save it; it's the only way to come back and check on your results later. Raw
+			reads is deleted as soon as it's processed, and results are kept for 7 days (or for 3
 			hours after they're first viewed).
 		</p>
 
@@ -135,6 +132,14 @@
 			Status of every BV-BRC API the pipeline runs through. Auto-checked when a run finishes.
 			<a id="health-settings-link" href="{{ url_for('settings') }}">Configure endpoints</a>.
 		</p>
+		{% if db_last_updated %}
+		<p id="db-last-updated">
+			Reference databases (CARD, MGEdb, AMRProt) last updated
+			<time datetime="{{ db_last_updated_iso }}" title="{{ db_last_updated_iso }}"
+				>{{ db_last_updated }}</time
+			>.
+		</p>
+		{% endif %}
 		<button id="refresh-health">Refresh</button>
 		<p id="health-status"></p>
 		<table class="status-table" id="health-table" hidden>

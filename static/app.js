@@ -1,29 +1,33 @@
-var STATUS_LABEL = { up: "● Operational", degraded: "● Degraded", down: "● Down" };
+let STATUS_LABEL = { up: "Operational", degraded: "Degraded", down: "Down" };
 
 function escapeHtml(value) {
-	return String(value === null || value === undefined ? "" : value)
-		.replaceAll("&", "&amp;")
-		.replaceAll("<", "&lt;")
-		.replaceAll(">", "&gt;")
-		.replaceAll('"', "&quot;")
-		.replaceAll("'", "&#39;");
+	return value === null || value === undefined
+		? ""
+		: value
+				.replaceAll("&", "&amp;")
+				.replaceAll("<", "&lt;")
+				.replaceAll(">", "&gt;")
+				.replaceAll('"', "&quot;")
+				.replaceAll("'", "&#39;");
 }
 
-function loadHealth() {
-	var status = document.getElementById("health-status");
+async function loadHealth() {
+	let status = document.getElementById("health-status");
 	status.textContent = "Checking services...";
-	var healthUrl = "/api/health";
+
+	let healthUrl = "/api/health";
 	if (currentJobId) healthUrl += "?job_id=" + encodeURIComponent(currentJobId);
+
 	return fetch(healthUrl)
-		.then(function (r) {
-			return r.json();
+		.then(function (response) {
+			return response.json();
 		})
 		.then(function (data) {
-			var table = document.getElementById("health-table");
-			var body = table.querySelector("tbody");
+			let table = document.getElementById("health-table");
+			let body = table.querySelector("tbody");
 			body.innerHTML = "";
 			data.services.forEach(function (s) {
-				var row = document.createElement("tr");
+				let row = document.createElement("tr");
 				row.innerHTML =
 					"<td><b>" +
 					escapeHtml(s.name) +
@@ -51,7 +55,7 @@ function loadHealth() {
 				body.appendChild(row);
 			});
 			table.hidden = false;
-			status.textContent = "Last checked just now.";
+			status.textContent = "Last checked just now";
 		})
 		.catch(function () {
 			status.textContent = "Health check failed to run.";
@@ -87,26 +91,26 @@ function formatDuration(seconds) {
 // between the 3s status polls, so they are recomputed locally each second: the
 // elapsed time from the start time the server gave us, and the wait from how
 // long ago the server gave us its estimate.
-var currentRunStatus = null;
-var currentRunStatusAt = null;
-var runTicker = null;
+let currentRunStatus = null;
+let currentRunStatusAt = null;
+let runTicker = null;
 
 function activeRunText(runStatus) {
 	if (runStatus.queued) {
-		var queuedText = `Queued (position ${runStatus.queue_position})`;
+		let queuedText = `Queued (position ${runStatus.queue_position})`;
 		if (runStatus.queue_wait_seconds === null || runStatus.queue_wait_seconds === undefined) {
 			return `${queuedText}; waiting for a free pipeline slot...`;
 		}
-		var secondsSinceStatus = currentRunStatusAt ? Date.now() / 1000 - currentRunStatusAt : 0;
-		var secondsToStart = Math.max(0, runStatus.queue_wait_seconds - secondsSinceStatus);
+		let secondsSinceStatus = currentRunStatusAt ? Date.now() / 1000 - currentRunStatusAt : 0;
+		let secondsToStart = Math.max(0, runStatus.queue_wait_seconds - secondsSinceStatus);
 		return `${queuedText} starts in ${formatDuration(secondsToStart)}, then runs for ${formatDuration(runStatus.estimated_seconds)} (estimates)`;
 	}
 
-	var elapsed = runStatus.started_at ? Date.now() / 1000 - runStatus.started_at : null;
-	var elapsedText = formatDuration(elapsed);
-	var text = "Pipeline running..." + (elapsedText ? " " + elapsedText + " elapsed" : "");
+	let elapsed = runStatus.started_at ? Date.now() / 1000 - runStatus.started_at : null;
+	let elapsedText = formatDuration(elapsed);
+	let text = "Pipeline running..." + (elapsedText ? " " + elapsedText + " elapsed" : "");
 	if (!runStatus.estimated_seconds || elapsed === null) return text;
-	var secondsLeft = runStatus.estimated_seconds - elapsed;
+	let secondsLeft = runStatus.estimated_seconds - elapsed;
 	return (
 		text +
 		(secondsLeft > 0
@@ -159,7 +163,7 @@ function showRunStatus(el, runStatus) {
 	}
 
 	stopRunTicker();
-	var took =
+	let took =
 		runStatus.started_at && runStatus.finished_at
 			? formatDuration(runStatus.finished_at - runStatus.started_at)
 			: "";
@@ -177,16 +181,16 @@ function showRunStatus(el, runStatus) {
 // Every upload that fed this job, and what each one cost. A job can be
 // filled by several uploads through several methods, so this is a list.
 function renderUploads(uploads) {
-	var el = document.getElementById("upload-summary");
+	let el = document.getElementById("upload-summary");
 	if (!uploads || !uploads.length) {
 		el.textContent = "";
 		return;
 	}
-	var totalSeconds = uploads.reduce(function (sum, upload) {
+	let totalSeconds = uploads.reduce(function (sum, upload) {
 		return sum + (upload.seconds || 0);
 	}, 0);
-	var descriptions = uploads.map(function (upload) {
-		var sampleCount = (upload.added || []).length + (upload.updated || []).length;
+	let descriptions = uploads.map(function (upload) {
+		let sampleCount = (upload.added || []).length + (upload.updated || []).length;
 		return (
 			upload.label +
 			" (" +
@@ -209,8 +213,8 @@ function renderUploads(uploads) {
 
 // Reserve the batch before uploading so simultaneous Add actions through
 // different methods all receive the same job ID.
-var currentJobId = null;
-var pendingJobReservation = null;
+let currentJobId = null;
+let pendingJobReservation = null;
 
 function ensureUploadJob() {
 	if (currentJobId) return Promise.resolve(currentJobId);
@@ -240,29 +244,29 @@ function addBatchFields(formData) {
 // The job currently shown in the "Your Batch" panel -- whatever was
 // last submitted/imported/looked up. All actions in that panel
 // (Run, Download All, per-sample Delete) act on this job.
-var runPollInterval = null;
+let runPollInterval = null;
 
 function renderJob(jobId, data) {
 	currentJobId = jobId;
-	var settingsUrl = "/settings?job_id=" + encodeURIComponent(jobId);
+	let settingsUrl = "/settings?job_id=" + encodeURIComponent(jobId);
 	document.getElementById("settings-link").href = settingsUrl;
 	document.getElementById("health-settings-link").href = settingsUrl;
 	document.getElementById("job-view").hidden = false;
 	document.getElementById("job-view-id").textContent = jobId;
 	renderUploads(data.uploads);
 
-	var sTable = document.getElementById("samples-table");
-	var sBody = sTable.querySelector("tbody");
-	var sEmpty = document.getElementById("samples-empty");
+	let sTable = document.getElementById("samples-table");
+	let sBody = sTable.querySelector("tbody");
+	let sEmpty = document.getElementById("samples-empty");
 	sBody.innerHTML = "";
 	if (!data.samples.length) {
 		sTable.hidden = true;
 		sEmpty.hidden = false;
 	} else {
 		data.samples.forEach(function (s) {
-			var row = document.createElement("tr");
-			var f1 = basename(s.R1_path);
-			var f2 = basename(s.R2_path);
+			let row = document.createElement("tr");
+			let f1 = basename(s.R1_path);
+			let f2 = basename(s.R2_path);
 			row.innerHTML =
 				"<td><b>" +
 				escapeHtml(s.isolate_id) +
@@ -273,7 +277,7 @@ function renderJob(jobId, data) {
 				"<td><small>" +
 				escapeHtml(f2) +
 				"</small></td><td></td>";
-			var deleteButton = document.createElement("button");
+			let deleteButton = document.createElement("button");
 			deleteButton.textContent = "Delete";
 			deleteButton.addEventListener("click", function () {
 				deletePair(f1, f2, deleteButton);
@@ -285,17 +289,17 @@ function renderJob(jobId, data) {
 		sEmpty.hidden = true;
 	}
 
-	var rTable = document.getElementById("results-table");
-	var rBody = rTable.querySelector("tbody");
-	var rEmpty = document.getElementById("results-empty");
+	let rTable = document.getElementById("results-table");
+	let rBody = rTable.querySelector("tbody");
+	let rEmpty = document.getElementById("results-empty");
 	rBody.innerHTML = "";
 	if (!data.results.length) {
 		rTable.hidden = true;
 		rEmpty.hidden = false;
 	} else {
 		data.results.forEach(function (res) {
-			var row = document.createElement("tr");
-			var viewCell = res.has_report
+			let row = document.createElement("tr");
+			let viewCell = res.has_report
 				? '<a href="/results/' +
 					jobId +
 					"/" +
@@ -321,9 +325,9 @@ function renderJob(jobId, data) {
 
 	document.getElementById("download-master-report").hidden = !data.has_master_report;
 
-	var runStatus = document.getElementById("run-status");
-	var runBtn = document.getElementById("run");
-	var abortBtn = document.getElementById("abort");
+	let runStatus = document.getElementById("run-status");
+	let runBtn = document.getElementById("run");
+	let abortBtn = document.getElementById("abort");
 	if (runPollInterval) {
 		clearInterval(runPollInterval);
 		runPollInterval = null;
@@ -355,8 +359,8 @@ function fetchJob(jobId) {
 }
 
 document.getElementById("lookup-btn").addEventListener("click", function () {
-	var jobId = document.getElementById("lookup-job-id").value.trim().toUpperCase();
-	var statusText = document.getElementById("lookup-status");
+	let jobId = document.getElementById("lookup-job-id").value.trim().toUpperCase();
+	let statusText = document.getElementById("lookup-status");
 	if (!jobId) {
 		status.textContent = "Enter a job ID first.";
 		return;
@@ -397,7 +401,7 @@ document.getElementById("download-master-report").addEventListener("click", func
 // the manifest, what was verified against the sequencing company's
 // checksums, and what was left out and why.
 function importSummary(d) {
-	var msg =
+	let msg =
 		"Job ID: " +
 		d.job_id +
 		". Save this to check your results later. (" +
@@ -440,21 +444,21 @@ function afterUpload(jobId) {
 // the server can release anything to S3 -- and one dropped connection costs the
 // entire upload. Batching caps the server's peak disk at roughly twice this
 // figure and lets a failed batch be retried on its own.
-var IMPORT_BATCH_BYTES = 2 * 1024 * 1024 * 1024;
+let IMPORT_BATCH_BYTES = 2 * 1024 * 1024 * 1024;
 
 // Mirrors _FASTQ_SUFFIX / _R1_MARKER / _ISOLATE_RE in workflow/lib/import_samples.py.
 // The pairing has to agree with the server's: an R1 and its R2 must ride in the
 // same batch, or the server finds no mate for it and skips the sample entirely.
-var FASTQ_SUFFIXES = [".fastq.gz", ".fq.gz", ".fastq", ".fq"];
-var R1_MARKER = /_R1([_.])/;
-var ISOLATE_RE = /_R[12][_.].*$/;
+let FASTQ_SUFFIXES = [".fastq.gz", ".fq.gz", ".fastq", ".fq"];
+let R1_MARKER = /_R1([_.])/;
+let ISOLATE_RE = /_R[12][_.].*$/;
 
 function uploadName(file) {
 	return file.webkitRelativePath || file.name;
 }
 
 function isFastq(fileName) {
-	var lowerCaseName = fileName.toLowerCase();
+	let lowerCaseName = fileName.toLowerCase();
 	return FASTQ_SUFFIXES.some(function (suffix) {
 		return lowerCaseName.endsWith(suffix);
 	});
@@ -468,21 +472,21 @@ function isolateIdFor(fileName) {
 // R1/R2 pair, plus each FASTQ with no mate (kept, rather than dropped here, so
 // the server still reports it as unpaired instead of it vanishing silently).
 function importUnits(files) {
-	var fastqsByName = {};
-	var nonFastqFiles = [];
-	for (var i = 0; i < files.length; i++) {
-		var fileName = basename(uploadName(files[i]));
+	let fastqsByName = {};
+	let nonFastqFiles = [];
+	for (let i = 0; i < files.length; i++) {
+		let fileName = basename(uploadName(files[i]));
 		if (isFastq(fileName)) fastqsByName[fileName] = files[i];
 		else nonFastqFiles.push(files[i]);
 	}
 
-	var units = [];
-	var pairedNames = {};
+	let units = [];
+	let pairedNames = {};
 	Object.keys(fastqsByName)
 		.sort()
 		.forEach(function (fileName) {
 			if (!R1_MARKER.test(fileName)) return;
-			var mateName = fileName.replace(R1_MARKER, "_R2$1");
+			let mateName = fileName.replace(R1_MARKER, "_R2$1");
 			if (!fastqsByName[mateName]) return;
 			pairedNames[fileName] = pairedNames[mateName] = true;
 			units.push([fastqsByName[fileName], fastqsByName[mateName]]);
@@ -509,7 +513,7 @@ function unsentUnits(units) {
 	return fetchJob(currentJobId)
 		.then(function (res) {
 			if (!res.ok || !res.d || !res.d.samples) return units;
-			var registeredIsolates = {};
+			let registeredIsolates = {};
 			res.d.samples.forEach(function (sample) {
 				registeredIsolates[sample.isolate_id] = true;
 			});
@@ -527,18 +531,18 @@ function importBatches(units, nonFastqFiles) {
 	// and it is what decides whether MD5s get verified at all -- so the stats
 	// workbook has to ride along in every batch, not just the first. It is a
 	// spreadsheet; the duplication costs nothing.
-	var workbooks = nonFastqFiles.filter(function (file) {
+	let workbooks = nonFastqFiles.filter(function (file) {
 		return basename(uploadName(file)).toLowerCase().endsWith(".xlsx");
 	});
-	var otherFiles = nonFastqFiles.filter(function (file) {
+	let otherFiles = nonFastqFiles.filter(function (file) {
 		return workbooks.indexOf(file) === -1;
 	});
 
-	var batches = [];
-	var currentBatch = [];
-	var currentBatchBytes = 0;
+	let batches = [];
+	let currentBatch = [];
+	let currentBatchBytes = 0;
 	units.forEach(function (unit) {
-		var unitBytes = totalBytes(unit);
+		let unitBytes = totalBytes(unit);
 		if (currentBatch.length && currentBatchBytes + unitBytes > IMPORT_BATCH_BYTES) {
 			batches.push(currentBatch);
 			currentBatch = [];
@@ -574,13 +578,13 @@ function mergeImportResult(summary, batchResult) {
 // count from start to finish and read as hung. Only XHR exposes xhr.upload.
 function postImportBatch(formData, onBytesSent) {
 	return new Promise(function (resolve, reject) {
-		var request = new XMLHttpRequest();
+		let request = new XMLHttpRequest();
 		request.open("POST", "/import");
 		request.upload.addEventListener("progress", function (event) {
 			if (event.lengthComputable) onBytesSent(event.loaded, event.total);
 		});
 		request.addEventListener("load", function () {
-			var data;
+			let data;
 			try {
 				data = JSON.parse(request.responseText);
 			} catch (error) {
@@ -600,30 +604,30 @@ function postImportBatch(formData, onBytesSent) {
 }
 
 document.getElementById("import-btn").addEventListener("click", async function () {
-	var status = document.getElementById("import-status");
-	var files = document.getElementById("import-folder").files;
+	let status = document.getElementById("import-status");
+	let files = document.getElementById("import-folder").files;
 	if (!files.length) {
 		status.textContent = "Choose a folder first.";
 		return;
 	}
 
-	var grouped = importUnits(files);
-	var units = await unsentUnits(grouped.units);
+	let grouped = importUnits(files);
+	let units = await unsentUnits(grouped.units);
 	if (grouped.units.length && !units.length) {
 		status.textContent =
 			"Every sample in this folder is already in the batch — nothing to send.";
 		return;
 	}
-	var batches = importBatches(units, grouped.nonFastqFiles);
+	let batches = importBatches(units, grouped.nonFastqFiles);
 	// Measured over the batches, not the folder, so the total counts what actually
 	// goes over the wire -- including the workbook each batch carries a copy of.
-	var bytesToSend = batches.reduce(function (runningTotal, batch) {
+	let bytesToSend = batches.reduce(function (runningTotal, batch) {
 		return runningTotal + totalBytes(batch);
 	}, 0);
-	var bytesSent = 0;
-	var startedAt = Date.now();
+	let bytesSent = 0;
+	let startedAt = Date.now();
 
-	var summary = {
+	let summary = {
 		added: [],
 		updated: [],
 		verified: [],
@@ -634,9 +638,9 @@ document.getElementById("import-btn").addEventListener("click", async function (
 		upload: { seconds: 0 },
 	};
 
-	for (var batchIndex = 0; batchIndex < batches.length; batchIndex++) {
-		var batch = batches[batchIndex];
-		var formData = new FormData();
+	for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
+		let batch = batches[batchIndex];
+		let formData = new FormData();
 		batch.forEach(function (file) {
 			formData.append("files", file, uploadName(file));
 		});
@@ -647,21 +651,21 @@ document.getElementById("import-btn").addEventListener("click", async function (
 			return;
 		}
 
-		var batchLabel = `batch ${batchIndex + 1} of ${batches.length}`;
-		var bytesSentBeforeBatch = bytesSent;
+		let batchLabel = `batch ${batchIndex + 1} of ${batches.length}`;
+		let bytesSentBeforeBatch = bytesSent;
 		// Covers the gap before the first progress event: without it the line would
 		// still show the previous batch's numbers while this one spins up.
 		status.textContent = `Uploading ${batchLabel}, starting...`;
 
-		var result;
+		let result;
 		try {
 			result = await postImportBatch(formData, function (batchBytesSent, batchBytesTotal) {
 				bytesSent = bytesSentBeforeBatch + batchBytesSent;
 				if (batchBytesSent < batchBytesTotal) {
-					var estimate = "";
-					var elapsedSeconds = (Date.now() - startedAt) / 1000;
+					let estimate = "";
+					let elapsedSeconds = (Date.now() - startedAt) / 1000;
 					if (elapsedSeconds >= 5 && bytesSent) {
-						var secondsLeft = ((bytesToSend - bytesSent) / bytesSent) * elapsedSeconds;
+						let secondsLeft = ((bytesToSend - bytesSent) / bytesSent) * elapsedSeconds;
 						estimate = `; around ${formatDuration(secondsLeft)} left`;
 					}
 					status.textContent = `Uploading your files, ${batchLabel}. In total, ${formatBytes(bytesSent)} / ${formatBytes(bytesToSend)} (${Math.floor((bytesSent / bytesToSend) * 100)}%) was sent${estimate}`;
@@ -699,8 +703,8 @@ document.getElementById("import-btn").addEventListener("click", async function (
 			// browser, doing the downloading), so /cloud-import hands back a job ID
 			// immediately and the progress arrives by polling.
 			function pollCloudImport(jobId, button) {
-				var status = document.getElementById("cloud-status");
-				var poll = setInterval(function () {
+				let status = document.getElementById("cloud-status");
+				let poll = setInterval(function () {
 					fetch("/cloud-import/status?job_id=" + encodeURIComponent(jobId))
 						.then(function (r) {
 							return r.json();
@@ -734,15 +738,15 @@ document.getElementById("import-btn").addEventListener("click", async function (
 			document
 				.getElementById("cloud-import-btn")
 				.addEventListener("click", async function () {
-					var status = document.getElementById("cloud-status");
-					var button = this;
-					var shareUrl = document.getElementById("cloud-url").value.trim();
+					let status = document.getElementById("cloud-status");
+					let button = this;
+					let shareUrl = document.getElementById("cloud-url").value.trim();
 					if (!shareUrl) {
 						status.textContent = "Paste a share link first.";
 						return;
 					}
 
-					var formData = new FormData();
+					let formData = new FormData();
 					formData.append("share_url", shareUrl);
 					try {
 						formData = await addBatchFields(formData);
@@ -781,17 +785,17 @@ document.getElementById("import-btn").addEventListener("click", async function (
 document.getElementById("submit").addEventListener("click", async function (event) {
 	event.preventDefault();
 
-	var fileInput1 = document.querySelector('input[name="fastq_file_1"]');
-	var fileInput2 = document.querySelector('input[name="fastq_file_2"]');
+	let fileInput1 = document.querySelector('input[name="fastq_file_1"]');
+	let fileInput2 = document.querySelector('input[name="fastq_file_2"]');
 
-	var checksum1 = document.querySelector('input[name="fastq_file_1_checksum"]').value.trim();
-	var checksum2 = document.querySelector('input[name="fastq_file_2_checksum"]').value.trim();
+	let checksum1 = document.querySelector('input[name="fastq_file_1_checksum"]').value.trim();
+	let checksum2 = document.querySelector('input[name="fastq_file_2_checksum"]').value.trim();
 
 	if (fileInput1.files.length > 0 && fileInput2.files.length > 0) {
-		var file1 = fileInput1.files[0];
-		var file2 = fileInput2.files[0];
+		let file1 = fileInput1.files[0];
+		let file2 = fileInput2.files[0];
 
-		var formData = new FormData();
+		let formData = new FormData();
 		formData.append("fastq_file_1", file1);
 		formData.append("fastq_file_2", file2);
 		formData.append("fastq_file_1_checksum", checksum1);
@@ -873,15 +877,15 @@ function pollRunStatus(jobId) {
 
 document.getElementById("run").addEventListener("click", function () {
 	if (!currentJobId) return;
-	var btn = this;
-	var abortBtn = document.getElementById("abort");
-	var status = document.getElementById("run-status");
+	let btn = this;
+	let abortBtn = document.getElementById("abort");
+	let status = document.getElementById("run-status");
 
 	btn.disabled = true;
 
 	status.textContent = "Starting pipeline...";
 
-	var formData = new FormData();
+	let formData = new FormData();
 	formData.append("job_id", currentJobId);
 	formData.append("username", document.getElementById("username").value);
 	formData.append("password", document.getElementById("password").value);
@@ -917,13 +921,13 @@ document.getElementById("run").addEventListener("click", function () {
 
 document.getElementById("abort").addEventListener("click", function () {
 	if (!currentJobId) return;
-	var btn = this;
-	var status = document.getElementById("run-status");
+	let btn = this;
+	let status = document.getElementById("run-status");
 
 	btn.disabled = true;
 	status.textContent = "Aborting...";
 
-	var formData = new FormData();
+	let formData = new FormData();
 	formData.append("job_id", currentJobId);
 
 	fetch("/abort", { method: "POST", body: formData })
@@ -948,7 +952,7 @@ document.getElementById("abort").addEventListener("click", function () {
 // and the user would have to re-enter the job ID they just came from.
 // /?job_id=XXXX reopens that batch exactly as a lookup would.
 (function reopenJobFromUrl() {
-	var requestedJobId = (new URLSearchParams(window.location.search).get("job_id") || "")
+	let requestedJobId = (new URLSearchParams(window.location.search).get("job_id") || "")
 		.trim()
 		.toUpperCase();
 	if (!requestedJobId) return;
