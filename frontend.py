@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -27,16 +27,16 @@ from flask_limiter.util import get_remote_address
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 
-from workflow.lib import api_registry, s3_storage
-from workflow.lib.bvbrc_client import BVBRCClient
-from workflow.lib.import_service import ImportService
+from workflow.helpers import api_registry, s3_storage
+from workflow.helpers.bvbrc_client import BVBRCClient
+from workflow.helpers.import_service import ImportService
 
 # Cloud import is disabled; these two are only needed by the commented-out
 # /cloud-import routes below.
-# from workflow.lib import cloud_import
-# from workflow.lib.import_service import CloudImportManager
-from workflow.lib.job_store import SAMPLE_FIELDS, JobStore
-from workflow.lib.jobs import (
+# from workflow.helpers import cloud_import
+# from workflow.helpers.import_service import CloudImportManager
+from workflow.helpers.job_store import SAMPLE_FIELDS, JobStore
+from workflow.helpers.jobs import (
 	generate_job_id,
 	is_valid_isolate_id,
 	is_valid_job_id,
@@ -44,10 +44,10 @@ from workflow.lib.jobs import (
 	job_results_dir,
 	job_samples_csv,
 )
-from workflow.lib.pipeline_manager import PipelineManager
-from workflow.lib.preprocess import verify_file_md5
-from workflow.lib.retention import RetentionService
-from workflow.lib.utils import stream_directory_zip
+from workflow.helpers.pipeline_manager import PipelineManager
+from workflow.helpers.preprocess import verify_file_md5
+from workflow.helpers.retention import RetentionService
+from workflow.helpers.utils import stream_directory_zip
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 
@@ -510,7 +510,14 @@ def run_startup_recovery():
 
 @app.route("/")
 def analysis():
-	return render_template("index.html")
+	databases_updated_at = _reference_databases_updated_at()
+	return render_template(
+		"index.html",
+		db_last_updated=_human_readable_time_ago(databases_updated_at) if databases_updated_at else None,
+		db_last_updated_iso=databases_updated_at.isoformat(timespec="seconds")
+		if databases_updated_at
+		else None,
+	)
 
 
 @app.route("/job/new", methods=["POST"])
@@ -572,10 +579,37 @@ def settings_reset():
 	return redirect(url_for("settings", job_id=job_id))
 
 
+def _reference_databases_updated_at():
+	"""When the pipeline's reference databases (CARD, MGEdb, AMRProt) were last
+	built, or None if that can't be determined.
+
+	They are image content -- refreshed only by the weekly image rebuild in
+	deploy/refresh-databases.sh, never in place (see DATABASE_UPDATES.md) -- so the
+	build stamp the Dockerfile writes beside them is the true "last updated" time.
+	Falls back to the AMR catalog's own build marker for local/CLI setups that
+	never went through a Docker build, and returns None when neither exists so the
+	page simply omits the line rather than showing a wrong or empty date."""
+	build_stamp = PROJECT_ROOT / "resources" / "blastdb" / ".db_built_at"
+	try:
+		stamped = build_stamp.read_text().strip()
+		if stamped:
+			# The Dockerfile writes UTC as ...Z; fromisoformat only learned to parse
+			# a trailing Z in 3.11, so normalise it for the conda base's interpreter.
+			if stamped.endswith("Z"):
+				stamped = stamped[:-1] + "+00:00"
+			return datetime.fromisoformat(stamped)
+	except (OSError, ValueError):
+		pass
+
+	amr_marker = PROJECT_ROOT / "resources" / "blastdb" / "amr" / ".ready"
+	try:
+		return datetime.fromtimestamp(amr_marker.stat().st_mtime, tz=timezone.utc)
+	except OSError:
+		return None
+
+
 def _human_readable_time_ago(dt):
 	"""Convert a datetime to a human-readable 'time ago' string."""
-	from datetime import timezone
-
 	now = datetime.now(timezone.utc) if dt.tzinfo else datetime.now()
 	diff = now - dt
 	seconds = diff.total_seconds()
@@ -1133,9 +1167,7 @@ def _zip_stream_response(directory, arc_root, download_name):
 	"""Serve a directory as a zip built on the fly, so the worker never holds more
 	than a chunk of it. download_name is always derived from an ID we have already
 	validated, so it is safe to put in the header verbatim."""
-	response = Response(
-		stream_directory_zip(directory, arc_root), mimetype="application/zip"
-	)
+	response = Response(stream_directory_zip(directory, arc_root), mimetype="application/zip")
 	response.headers["Content-Disposition"] = f'attachment; filename="{download_name}"'
 	return response
 
@@ -1171,6 +1203,9 @@ def download_result(job_id, isolate_id):
 @app.route("/results/<job_id>/download-all")
 def download_all_results(job_id):
 	_job_or_400(job_id)
+	# Downloading results counts as viewing them: start the 3-hour TTL clock so a
+	# user who jumps straight to the archive still gets the full download window.
+	_mark_first_viewed(job_id)
 	download_url = s3_storage.presigned_download_url(
 		s3_storage.key_for(job_id, f"{job_id}_results.zip"),
 		filename=f"{job_id}_results.zip",
@@ -1187,6 +1222,9 @@ def download_all_results(job_id):
 @app.route("/results/<job_id>/master-report/download")
 def download_master_report(job_id):
 	_job_or_400(job_id)
+	# Downloading results counts as viewing them: start the 3-hour TTL clock so a
+	# user who jumps straight to the archive still gets the full download window.
+	_mark_first_viewed(job_id)
 	resolved_path = job_results_dir(job_id) / "master_report.csv"
 	if resolved_path.is_file():
 		return send_file(

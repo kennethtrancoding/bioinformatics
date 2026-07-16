@@ -25,10 +25,10 @@ TMP_ROOT = Path(tempfile.mkdtemp(prefix="pipeline_tests_"))
 atexit.register(shutil.rmtree, TMP_ROOT, ignore_errors=True)
 
 for subdirectory in ("data/raw_fastq", "results", "logs", "config/jobs"):
-    (TMP_ROOT / subdirectory).mkdir(parents=True, exist_ok=True)
+	(TMP_ROOT / subdirectory).mkdir(parents=True, exist_ok=True)
 
 import frontend  # noqa: E402
-from workflow.lib import import_samples, jobs  # noqa: E402
+from workflow.helpers import import_samples, jobs  # noqa: E402
 
 # jobs.* helpers build every job path from this.
 jobs.PROJECT_ROOT = TMP_ROOT

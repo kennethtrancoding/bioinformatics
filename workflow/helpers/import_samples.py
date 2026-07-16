@@ -17,7 +17,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from workflow.lib.utils import compute_md5
+from workflow.helpers.utils import compute_md5
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_SAMPLES_CSV = PROJECT_ROOT / "config" / "samples.csv"

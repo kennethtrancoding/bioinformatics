@@ -107,8 +107,7 @@ import os
 import statistics
 import time
 
-from workflow.lib import jobs, run_estimate_net
-
+from workflow.helpers import jobs, run_estimate_net
 
 # What one sample costs at BV-BRC: the Similar Genome Finder, then the
 # Comprehensive Genome Analysis, plus BV-BRC's own queue. Paid once per round of

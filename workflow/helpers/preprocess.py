@@ -4,12 +4,11 @@ Handles MD5 checksums, file integrity, and sample manifest parsing.
 """
 
 import csv
-import logging
-from pathlib import Path
-from typing import List, Dict, Optional, Tuple
 import gzip
-from workflow.lib.utils import compute_md5, setup_logger, load_json_safe
+from pathlib import Path
+from typing import Dict, List, Tuple
 
+from workflow.helpers.utils import compute_md5, setup_logger
 
 logger = setup_logger("preprocess")
 
@@ -54,7 +53,7 @@ def count_fastq_records(file_path: str, sample_size: int = 1000) -> int:
 
 		estimated_total = (line_count // 4) if line_count > 0 else 0
 		return (
-		 estimated_total if estimated_total == 0 else int((estimated_total / sample_size) * 1e5)
+			estimated_total if estimated_total == 0 else int((estimated_total / sample_size) * 1e5)
 		)
 	except Exception as exception:
 		logger.error(f"Failed to count FASTQ records in {file_path}: {exception}")
@@ -177,7 +176,11 @@ def load_sample_manifest(manifest_file: str) -> List[Dict[str, str]]:
 		with open(manifest_file, "r") as file_handle:
 			reader = csv.DictReader(file_handle)
 			for manifest_row in reader:
-				if manifest_row.get("isolate_id") and manifest_row.get("R1_path") and manifest_row.get("R2_path"):
+				if (
+					manifest_row.get("isolate_id")
+					and manifest_row.get("R1_path")
+					and manifest_row.get("R2_path")
+				):
 					sample_records.append(manifest_row)
 				else:
 					logger.warning(f"Skipping incomplete row: {manifest_row}")
@@ -259,7 +262,7 @@ def generate_preprocess_report(sample_records: List[Dict[str, str]], output_file
 
 				file_handle.write("\n")
 
-			file_handle.write(f"\n## Summary\n")
+			file_handle.write("\n## Summary\n")
 			file_handle.write(f"Valid samples: {valid_count}/{len(sample_records)}\n")
 
 		logger.info(f"Preprocessing report saved to {output_file}")

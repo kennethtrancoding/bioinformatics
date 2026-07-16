@@ -33,8 +33,8 @@ from urllib.parse import parse_qs, quote, urlencode, urljoin, urlparse, urlunpar
 import requests
 from werkzeug.utils import secure_filename
 
-from workflow.lib import import_samples
-from workflow.lib.preprocess import validate_fastq_integrity
+from workflow.helpers import import_samples
+from workflow.helpers.preprocess import validate_fastq_integrity
 
 
 class CloudImportError(Exception):

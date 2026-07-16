@@ -6,7 +6,7 @@ import threading
 import time
 from pathlib import Path
 
-from workflow.lib import cloud_import, import_samples
+from workflow.helpers import cloud_import, import_samples
 
 
 class StreamToDiskAndS3:
@@ -50,7 +50,9 @@ class ImportService:
 				self.storage.upload_raw_fileobj(job_id, destination_path.name, stream)
 				stored_in_s3 = self.storage.is_enabled()
 			except Exception as exception:
-				print(f"[s3] failed to stream raw {destination_path.name} for job {job_id}: {exception}")
+				print(
+					f"[s3] failed to stream raw {destination_path.name} for job {job_id}: {exception}"
+				)
 			stream.drain()
 		finally:
 			stream.close()
@@ -71,7 +73,9 @@ class ImportService:
 			try:
 				self.storage.delete_raw_file(job_id, path.name)
 			except Exception as exception:
-				print(f"[s3] failed to delete rejected raw {path.name} for job {job_id}: {exception}")
+				print(
+					f"[s3] failed to delete rejected raw {path.name} for job {job_id}: {exception}"
+				)
 
 	def backup_raw_files(self, job_id, raw_paths):
 		if not self.storage.is_enabled():
@@ -159,12 +163,18 @@ class CloudImportManager:
 			self.prune()
 			running = sum(1 for record in self.records.values() if record.get("state") == "running")
 			if running >= self.max_concurrent:
-				return False, "Too many cloud imports are already running. Try again in a few minutes."
+				return (
+					False,
+					"Too many cloud imports are already running. Try again in a few minutes.",
+				)
 			if self.records.get(job_id, {}).get("state") == "running":
 				return False, "This job already has a cloud import running."
 			self.records[job_id] = {
-				"state": "running", "message": "Reading the shared folder…", "files_done": 0,
-				"files_total": None, "finished_at": None,
+				"state": "running",
+				"message": "Reading the shared folder…",
+				"files_done": 0,
+				"files_total": None,
+				"finished_at": None,
 			}
 		threading.Thread(
 			target=self._run,
@@ -197,7 +207,13 @@ class CloudImportManager:
 			result["warnings"] = fetch_result["warnings"] + result["warnings"]
 			result["skipped"] = len(result["warnings"])
 			self.on_complete(job_id, result, upload_form)
-			self.set(job_id, state="done", message="Import complete.", result=result, finished_at=time.time())
+			self.set(
+				job_id,
+				state="done",
+				message="Import complete.",
+				result=result,
+				finished_at=time.time(),
+			)
 		except cloud_import.CloudImportError as exception:
 			self.set(job_id, state="error", error=str(exception), finished_at=time.time())
 		except Exception as exception:

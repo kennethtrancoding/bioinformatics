@@ -70,6 +70,22 @@ itself: **the image is the database.** That is why refreshing one necessarily
 produces a new image, and a new image necessarily means a restart — there is no
 in-place update that survives the next container start.
 
+### Showing the database age on the site
+
+The Dockerfile writes the build time to `resources/blastdb/.db_built_at` in the
+same layer that builds CARD, MGEdb, and AMRProt, and the analysis page shows it as
+"Reference databases last updated …" (`_reference_databases_updated_at` in
+`frontend.py`). Because the stamp shares that layer's cache, it moves exactly when
+the databases do: a rebuild that re-solves them writes a new time; one that reuses
+the cached layer keeps the old one, which is correct — the databases did not change
+either. `resources/blastdb/` is in `.dockerignore`, so `COPY . .` never overwrites
+the in-image stamp with a developer's local copy. Local/CLI runs that never built
+an image have no stamp, so the page falls back to the AMR catalog's `.ready` marker,
+and omits the line entirely if neither exists.
+
+This is a different timestamp from the unused `results/.db_update_info.json` below —
+that one is written by a script the pipeline never relies on and is still not shown.
+
 ### What the refresh does to jobs that are running
 
 Snakemake runs as a child of the container, so the restart at the end of a refresh

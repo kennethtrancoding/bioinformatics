@@ -23,13 +23,15 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path.cwd()))
 
-from workflow.lib import s3_storage  # noqa: E402
+from workflow.helpers import s3_storage  # noqa: E402
 
 
 def main(argv=None):
 	argument_parser = argparse.ArgumentParser(description=__doc__)
 	argument_parser.add_argument("--job-id", required=True)
-	argument_parser.add_argument("--name", required=True, help="the FASTQ's basename, as stored in S3")
+	argument_parser.add_argument(
+		"--name", required=True, help="the FASTQ's basename, as stored in S3"
+	)
 	argument_parser.add_argument("--out", required=True, help="where the run expects to read it")
 	parsed_args = argument_parser.parse_args(argv)
 

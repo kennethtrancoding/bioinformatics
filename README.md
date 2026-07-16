@@ -324,6 +324,87 @@ Persist `data/`, `results/`, `config/jobs/`, and `logs/` on Docker volumes. They
 hold in-flight job state — uploads, sample manifests, BV-BRC tokens, and run
 logs — and a container restart without them loses any job that is mid-run.
 
+### State durability
+
+Those volumes survive a container restart, but not the loss of the instance or its
+EBS volume. Finished results are safe — with `RESULTS_S3_BUCKET` set they are in S3
+— but the in-flight state (manifests, tokens, the persisted queue, run history, and
+any run in progress) lives only on the instance's disk. A dead EBS volume loses it.
+
+`deploy/dlm-snapshot-policy.json` is an AWS Data Lifecycle Manager policy that
+snapshots the state volume every 6 hours and keeps a week of them, so a lost
+instance costs at most the jobs submitted since the last snapshot — and re-running
+those is cheap and safe (Snakemake skips completed samples). It is the
+scale-appropriate fix at two-active-runs: a block-level snapshot with no
+application code, and no BV-BRC tokens copied into object storage. Setup and restore
+are in [deploy/backups.md](deploy/backups.md).
+
+## Scaling beyond one host
+
+The single most common question about this deployment is how to auto-scale it. The
+honest answer is that **it cannot be horizontally auto-scaled as written**, and the
+reason is worth understanding before reaching for an Auto Scaling Group.
+
+The concurrency cap and the run queue live in **one Gunicorn process's memory**
+(`gunicorn.conf.py` pins `workers = 1`; see [Concurrent Runs](#concurrent-runs)),
+and each job's state is a set of files on that instance's own volume. Put a second
+app instance behind a load balancer and three things break at once:
+
+- **The cap stops meaning anything.** Each instance enforces
+  `MAX_CONCURRENT_PIPELINES` against only its own runs, so the real ceiling becomes
+  `instances × MAX_CONCURRENT_PIPELINES` — precisely the overload the cap exists to
+  prevent, and the OOM the box was protecting itself from.
+- **Jobs vanish between instances.** A job created on instance A is a directory on
+  A's volume; a status poll routed to B returns 404.
+- **The queue forks.** Each instance has its own in-memory queue and its own view of
+  what is running, so neither can schedule against the whole box.
+
+An Auto Scaling Group that adds and removes instances would split and lose job state
+on every scaling action. So "auto scaling" here has three real meanings, only one of
+which is horizontal:
+
+1. **Vertical — the supported answer.** Move to a bigger instance and raise
+   `PIPELINE_CORES` / `MAX_CONCURRENT_PIPELINES`. The local stage of a run is
+   CPU-bound and linear in sample count, so cores are the lever that shortens a big
+   batch (see [What a batch costs](#what-a-batch-costs-and-what-bounds-it)). Not
+   automatic, but it is the honest way to add capacity to this design.
+
+2. **An ASG of size 1 — for self-healing, not scale-out.** `min = max = desired = 1`
+   plus a health check never runs two app instances; it just replaces a dead one
+   automatically. For that to preserve jobs, the state must outlive the instance —
+   which is exactly what the dedicated data volume + snapshots in
+   [deploy/backups.md](deploy/backups.md) provide. Without decoupled or restorable
+   state, the replacement comes up empty, and you have bought availability of the app
+   tier while losing the work. This is the most availability you can add without the
+   redesign below.
+
+3. **True horizontal scale — decouple state, then move execution off the box.** This
+   is the point at which the usual "scale it" advice (a metadata database, a message
+   broker, a control/data-plane split) finally earns its keep, because there are
+   finally multiple workers and app instances to coordinate:
+
+   - **Shared state.** Move job metadata and the queue out of process memory and
+     local files into a shared store — an RDS/PostgreSQL instance for metadata and
+     queue, with S3 continuing to hold the blobs. Now any app instance can see any
+     job, and the cap can be enforced centrally instead of per-process.
+   - **Execution off the app box.** Submit the pipeline's local rules to **AWS Batch**
+     or a cluster via Snakemake's native executors (already flagged in
+     [What a batch costs](#what-a-batch-costs-and-what-bounds-it) as the escape hatch
+     past a few hundred samples). The app tier becomes stateless and *can* sit behind
+     an ASG that scales on request load, while the heavy compute scales on Batch's own
+     managed capacity — the control plane and data plane separating along the seam
+     that already exists informally today.
+
+**When to actually do #3.** Not request volume — this app will never be QPS-bound;
+its unit of work is an hours-long batch, not a web request. The trigger is either
+(a) genuine multi-tenant use, where several institutions need isolation and
+independent capacity rather than one shared filesystem and one shared queue, or
+(b) batches past a few hundred samples, where one box's local stage takes days.
+Until one of those is real, **vertical scaling plus an ASG of 1 plus snapshots** is
+the correct, proportionate posture, and the redesign above is premature. When it
+does become real, [docs/horizontal-scale.md](docs/horizontal-scale.md) is the full
+redesign plan and AWS console runbook for it.
+
 ## Direct Snakemake Usage
 
 Create a sample manifest with this header:

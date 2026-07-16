@@ -11,8 +11,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import requests
 
-from workflow.lib.jobs import is_valid_isolate_id
-from workflow.lib.utils import retry, setup_logger
+from workflow.helpers.jobs import is_valid_isolate_id
+from workflow.helpers.utils import retry, setup_logger
 
 logger = setup_logger("bvbrc_client")
 
@@ -47,7 +47,7 @@ class BVBRCClient:
 		    job_id: Optional job ID for job-specific API endpoint overrides
 		"""
 		if job_id is not None:
-			from workflow.lib.jobs import is_valid_job_id, job_token_path
+			from workflow.helpers.jobs import is_valid_job_id, job_token_path
 
 			if not is_valid_job_id(job_id):
 				raise ValueError("Invalid job ID")
@@ -66,7 +66,7 @@ class BVBRCClient:
 		# to the class defaults if the registry isn't importable.
 		# Job-specific overrides take precedence over global overrides.
 		try:
-			from workflow.lib.api_registry import load_overrides
+			from workflow.helpers.api_registry import load_overrides
 
 			overrides = load_overrides(job_id=job_id)
 			self.AUTH_URL = overrides.get("auth", self.AUTH_URL)

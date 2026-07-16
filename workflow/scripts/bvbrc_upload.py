@@ -9,8 +9,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path.cwd()))
 
-from workflow.lib.bvbrc_client import BVBRCClient
-from workflow.lib.utils import setup_logger
+from workflow.helpers.bvbrc_client import BVBRCClient
+from workflow.helpers.utils import setup_logger
 
 logger = setup_logger("bvbrc_upload", snakemake.log[0])
 
@@ -38,17 +38,19 @@ if not workspace:
 
 logger.info(f"Using workspace: {workspace}")
 
-success, r1_remote, r2_remote = client.upload_paired_reads(first_read_path, second_read_path, sample_id)
+success, r1_remote, r2_remote = client.upload_paired_reads(
+	first_read_path, second_read_path, sample_id
+)
 
 if not success:
 	raise RuntimeError(f"Failed to upload paired reads for {sample_id}")
 
 upload_data = {
- "sample_id": sample_id,
- "workspace": workspace,
- "r1_remote": r1_remote,
- "r2_remote": r2_remote,
- "status": "success",
+	"sample_id": sample_id,
+	"workspace": workspace,
+	"r1_remote": r1_remote,
+	"r2_remote": r2_remote,
+	"status": "success",
 }
 
 with open(output_log, "w") as file_handle:
