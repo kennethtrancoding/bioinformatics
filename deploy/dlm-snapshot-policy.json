@@ -1,0 +1,24 @@
+{
+  "PolicyType": "EBS_SNAPSHOT_MANAGEMENT",
+  "ResourceTypes": ["VOLUME"],
+  "TargetTags": [
+    { "Key": "backup", "Value": "bioinformatics-state" }
+  ],
+  "Schedules": [
+    {
+      "Name": "every-6h-keep-7d",
+      "CreateRule": {
+        "Interval": 6,
+        "IntervalUnit": "HOURS",
+        "Times": ["01:00"]
+      },
+      "RetainRule": {
+        "Count": 28
+      },
+      "CopyTags": true,
+      "TagsToAdd": [
+        { "Key": "snapshot-of", "Value": "bioinformatics-state" }
+      ]
+    }
+  ]
+}

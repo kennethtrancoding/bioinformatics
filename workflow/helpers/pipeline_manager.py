@@ -34,7 +34,7 @@ import threading
 import time
 from collections import deque
 
-from workflow.lib import jobs, run_estimates
+from workflow.helpers import jobs, run_estimates
 
 
 class PipelineManager:
@@ -103,7 +103,9 @@ class PipelineManager:
 		error_start = log_text.rfind("Error in rule ")
 		if error_start == -1:
 			error_start = log_text.rfind("\nError")
-		return None if error_start == -1 else log_text[error_start : error_start + max_chars].strip()
+		return (
+			None if error_start == -1 else log_text[error_start : error_start + max_chars].strip()
+		)
 
 	def job_slots(self):
 		"""What to hand Snakemake as ``--cores``.
@@ -129,15 +131,19 @@ class PipelineManager:
 		with log_path.open("w") as pipeline_log_file:
 			process = self.popen_module.Popen(
 				[
-					"snakemake", "--cores", str(self.job_slots()),
+					"snakemake",
+					"--cores",
+					str(self.job_slots()),
 					# Every rule costs a core of the box unless it says otherwise; the
 					# ones that only wait on BV-BRC say otherwise (resources: cpu=0).
-					"--default-resources", "cpu=1",
+					"--default-resources",
+					"cpu=1",
 					"--resources",
 					f"cpu={self.cores}",
 					f"bvbrc={self.bvbrc_in_flight}",
 					f"uploads={self.upload_batch}",
-					"--use-conda", "--rerun-incomplete",
+					"--use-conda",
+					"--rerun-incomplete",
 					# Re-run a step only when its output is actually missing or stale in time.
 					#
 					# Snakemake's default triggers also include `code` and `params`, which are
@@ -153,8 +159,11 @@ class PipelineManager:
 					# already exist are NOT recomputed -- delete them (or --forcerun) to redo
 					# them. That is the right trade when the output is an assembly, which does
 					# not change because our code did.
-					"--rerun-triggers", "mtime",
-					"--nolock", "--config", f"job_id={job_id}",
+					"--rerun-triggers",
+					"mtime",
+					"--nolock",
+					"--config",
+					f"job_id={job_id}",
 					f"results_dir={results_dir.relative_to(self.project_root())}",
 					f"samples_manifest={jobs.job_samples_csv(job_id).relative_to(self.project_root())}",
 					# The CPU budget again, this time so the rules can size their own thread
@@ -163,7 +172,9 @@ class PipelineManager:
 					# ask for, and RGI fails outright when it asks for more than the box has.
 					f"pipeline_cores={self.cores}",
 				],
-				cwd=self.project_root(), stdout=pipeline_log_file, stderr=self.popen_module.STDOUT,
+				cwd=self.project_root(),
+				stdout=pipeline_log_file,
+				stderr=self.popen_module.STDOUT,
 				start_new_session=True,
 			)
 		self.processes[job_id] = process
@@ -195,7 +206,9 @@ class PipelineManager:
 		try:
 			self.storage.mark_raw_unrun(job_id)
 		except Exception as exception:
-			print(f"[s3] could not return raw reads to the expiry clock for job {job_id}: {exception}")
+			print(
+				f"[s3] could not return raw reads to the expiry clock for job {job_id}: {exception}"
+			)
 
 	def watch(self, job_id, process):
 		returncode = process.wait()
@@ -265,9 +278,7 @@ class PipelineManager:
 		if pending is None:
 			pending = self.pending_work(job_id)
 		samples, assemblies = pending
-		return run_estimates.estimate_seconds(
-			samples, self.bvbrc_in_flight, self.cores, assemblies
-		)
+		return run_estimates.estimate_seconds(samples, self.bvbrc_in_flight, self.cores, assemblies)
 
 	def remaining_seconds(self, job_id, now=None):
 		"""How much longer a running job has. A run that has already outlasted its
@@ -346,9 +357,13 @@ class PipelineManager:
 			if (process is not None and process.poll() is None) or job_id in self.queue:
 				return {"error": "This pipeline job is already in progress"}, 409
 			if job_id in self.expiring_jobs:
-				return {"error": "This job has expired and its data is being deleted. Upload again to start a new job."}, 410
+				return {
+					"error": "This job has expired and its data is being deleted. Upload again to start a new job."
+				}, 410
 			if not authenticated():
-				return {"error": "BV-BRC login required: submit your BV-BRC username and password before running"}, 401
+				return {
+					"error": "BV-BRC login required: submit your BV-BRC username and password before running"
+				}, 401
 			self.job_store.reset_run_markers(job_id)
 			# The wait for a slot starts now, whether this job takes one immediately or
 			# joins the queue. Written before either branch so ``_record_duration`` can
@@ -360,15 +375,22 @@ class PipelineManager:
 				self.queue.append(job_id)
 				self.persist_queue()
 				payload = {
-					"message": "Pipeline queued for a database refresh; it starts automatically when the refresh finishes" if draining else "Pipeline queued",
-					"job_id": job_id, "queued": True, "queue_position": len(self.queue),
+					"message": "Pipeline queued for a database refresh; it starts automatically when the refresh finishes"
+					if draining
+					else "Pipeline queued",
+					"job_id": job_id,
+					"queued": True,
+					"queue_position": len(self.queue),
 					"queue_wait_seconds": self.queue_wait_seconds(job_id),
 					"estimated_seconds": self.estimated_seconds(job_id),
 				}
 				status = 202
 			else:
 				self.start(job_id)
-				payload, status = {"message": "Pipeline started", "job_id": job_id, "queued": False}, 200
+				payload, status = (
+					{"message": "Pipeline started", "job_id": job_id, "queued": False},
+					200,
+				)
 		self.claim_raw(job_id)
 		return payload, status
 
@@ -378,7 +400,8 @@ class PipelineManager:
 		try:
 			persisted_queue = json.loads(jobs.pipeline_queue_path().read_text())
 			queued_job_ids = [
-				job_id for job_id in persisted_queue
+				job_id
+				for job_id in persisted_queue
 				if jobs.is_valid_job_id(job_id) and jobs.job_samples_csv(job_id).is_file()
 			]
 		except FileNotFoundError:
@@ -389,10 +412,19 @@ class PipelineManager:
 		if results_root.is_dir():
 			for directory in results_root.iterdir():
 				job_id = directory.name
-				if not directory.is_dir() or not jobs.is_valid_job_id(job_id) or job_id in queued_set:
+				if (
+					not directory.is_dir()
+					or not jobs.is_valid_job_id(job_id)
+					or job_id in queued_set
+				):
 					continue
-				if jobs.job_run_started_path(job_id).is_file() and not jobs.job_status_path(job_id).is_file():
-					print(f"[pipeline] job {job_id} was interrupted by a restart; recording it as failed")
+				if (
+					jobs.job_run_started_path(job_id).is_file()
+					and not jobs.job_status_path(job_id).is_file()
+				):
+					print(
+						f"[pipeline] job {job_id} was interrupted by a restart; recording it as failed"
+					)
 					try:
 						self._write_status(job_id, False, interrupted=True)
 					except OSError as exception:

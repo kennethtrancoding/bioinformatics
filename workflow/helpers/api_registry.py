@@ -119,7 +119,7 @@ def load_overrides(job_id=None):
 	if not job_id:
 		return {}
 	try:
-		from workflow.lib.jobs import is_valid_job_id, job_api_endpoints_path
+		from workflow.helpers.jobs import is_valid_job_id, job_api_endpoints_path
 
 		if not is_valid_job_id(job_id):
 			return {}
@@ -166,7 +166,7 @@ def save_job_overrides(job_id, form):
 	Returns:
 		Dictionary of saved overrides.
 	"""
-	from workflow.lib.jobs import is_valid_job_id, job_api_endpoints_path
+	from workflow.helpers.jobs import is_valid_job_id, job_api_endpoints_path
 
 	if not is_valid_job_id(job_id):
 		raise ValueError("Invalid job ID")
@@ -201,7 +201,7 @@ def _load_token(job_id=None):
 	if not job_id:
 		return None
 	try:
-		from workflow.lib.jobs import job_token_path
+		from workflow.helpers.jobs import job_token_path
 
 		with job_token_path(job_id).open() as file_handle:
 			return json.load(file_handle).get("access_token")

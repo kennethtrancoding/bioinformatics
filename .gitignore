@@ -23,7 +23,7 @@ eggs/
 # Anchored to repo root: an unanchored `lib/`/`lib64/` (the standard Python
 # template) matches at any depth and was silently excluding the real
 # workflow/lib/ package (jobs.py, utils.py, s3_storage.py, ...) from git.
-/lib/
+/helpers/
 /lib64/
 parts/
 sdist/

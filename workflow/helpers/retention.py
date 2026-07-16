@@ -4,11 +4,13 @@ import shutil
 import threading
 import time
 
-from workflow.lib import jobs
+from workflow.helpers import jobs
 
 
 class RetentionService:
-	def __init__(self, pipeline_manager, storage, client_factory, project_root, data_root, results_root):
+	def __init__(
+		self, pipeline_manager, storage, client_factory, project_root, data_root, results_root
+	):
 		self.pipeline_manager = pipeline_manager
 		self.storage = storage
 		self.client_factory = client_factory
@@ -81,10 +83,16 @@ class RetentionService:
 		if config_root.is_dir():
 			for directory in config_root.iterdir():
 				token_path = directory / ".bvbrc_token"
-				if not token_path.is_file() or current_time - token_path.stat().st_mtime < self.max_ttl_seconds:
+				if (
+					not token_path.is_file()
+					or current_time - token_path.stat().st_mtime < self.max_ttl_seconds
+				):
 					continue
 				with self.pipeline_manager.lock:
-					if directory.name not in self.pipeline_manager.processes and directory.name not in self.pipeline_manager.queue:
+					if (
+						directory.name not in self.pipeline_manager.processes
+						and directory.name not in self.pipeline_manager.queue
+					):
 						token_path.unlink(missing_ok=True)
 		data_root = self.data_root()
 		if data_root.is_dir():
@@ -92,7 +100,10 @@ class RetentionService:
 				job_id = directory.name
 				if not directory.is_dir() or not jobs.is_valid_job_id(job_id):
 					continue
-				if jobs.job_status_path(job_id).is_file() or current_time - directory.stat().st_mtime < self.max_ttl_seconds:
+				if (
+					jobs.job_status_path(job_id).is_file()
+					or current_time - directory.stat().st_mtime < self.max_ttl_seconds
+				):
 					continue
 				if not self._claim_unrun(job_id):
 					continue

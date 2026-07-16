@@ -22,20 +22,22 @@ resumes by itself on the other side.
 """
 
 import json
-import subprocess
 import sys
 import time
 import unittest
-from pathlib import Path
 from unittest import mock
 
-from tests._isolation import TMP_ROOT, REAL_ROOT  # noqa: F401  (must import first)
-
 import frontend  # noqa: E402
-from workflow.lib import cloud_import, jobs, run_estimate_net, run_estimates  # noqa: E402
-
-from tests.test_batching import Base, token_for, _REAL_POPEN  # noqa: E402
-from tests.test_cloud_import import FakeDrive, SHARED_FOLDER, fastq_bytes, md5, stats_workbook  # noqa: E402
+from tests._isolation import REAL_ROOT, TMP_ROOT  # noqa: F401  (must import first)
+from tests.test_batching import _REAL_POPEN, Base, token_for  # noqa: E402
+from tests.test_cloud_import import (  # noqa: E402
+	SHARED_FOLDER,
+	FakeDrive,
+	fastq_bytes,
+	md5,
+	stats_workbook,
+)
+from workflow.helpers import cloud_import, jobs, run_estimate_net, run_estimates  # noqa: E402
 
 RELEASE_DIR = TMP_ROOT / "release"
 RELEASE_DIR.mkdir(parents=True, exist_ok=True)
@@ -55,12 +57,8 @@ def _held_popen(argv, **kwargs):
 	Reads the job id out of the argv the app built, so each run gets its own release
 	file and runs can be finished in any order -- which is what lets this test free
 	one slot while another run is still going."""
-	job_id = next(
-		argument.split("=", 1)[1] for argument in argv if argument.startswith("job_id=")
-	)
-	return _REAL_POPEN(
-		[sys.executable, "-c", _HOLD_SCRIPT, str(RELEASE_DIR / job_id)], **kwargs
-	)
+	job_id = next(argument.split("=", 1)[1] for argument in argv if argument.startswith("job_id="))
+	return _REAL_POPEN([sys.executable, "-c", _HOLD_SCRIPT, str(RELEASE_DIR / job_id)], **kwargs)
 
 
 def _wait_until(predicate, timeout=10, what="condition"):
@@ -128,16 +126,17 @@ class NormalUserFlow(Base):
 		payload = {"share_url": SHARED_FOLDER}
 		if job_id:
 			payload["job_id"] = job_id
-		with mock.patch.object(cloud_import, "_SESSION", drive), mock.patch.object(
-			cloud_import, "GOOGLE_API_KEY", "test-key"
+		with (
+			mock.patch.object(cloud_import, "_SESSION", drive),
+			mock.patch.object(cloud_import, "GOOGLE_API_KEY", "test-key"),
 		):
 			response = self.client.post("/cloud-import", data=payload)
 			self.assertEqual(response.status_code, 202, response.get_data(as_text=True))
 			imported_job_id = response.get_json()["job_id"]
 			_wait_until(
-				lambda: self.client.get(
-					f"/cloud-import/status?job_id={imported_job_id}"
-				).get_json().get("state")
+				lambda: self.client.get(f"/cloud-import/status?job_id={imported_job_id}")
+				.get_json()
+				.get("state")
 				!= "running",
 				timeout=30,
 				what="cloud import to finish",
@@ -473,8 +472,12 @@ class NormalUserFlow(Base):
 		self.assertAlmostEqual(entry["seconds"], 100, delta=3)
 		# The factor is the runtime over the baseline, not the runtime plus the wait:
 		# had the 40s wait leaked into it, this would be off by nearly half.
-		self.assertAlmostEqual(entry["factor"], entry["seconds"] / entry["baseline_seconds"], places=3)
-		self.assertLess(entry["factor"], (entry["seconds"] + entry["queue_seconds"]) / entry["baseline_seconds"])
+		self.assertAlmostEqual(
+			entry["factor"], entry["seconds"] / entry["baseline_seconds"], places=3
+		)
+		self.assertLess(
+			entry["factor"], (entry["seconds"] + entry["queue_seconds"]) / entry["baseline_seconds"]
+		)
 
 	def test_a_queue_time_that_was_never_measured_is_stored_as_unknown_not_zero(self):
 		"""A run from before admission was tracked has no wait on record. Unknown is

@@ -22,13 +22,11 @@ import time
 import unittest
 from unittest import mock
 
-from tests._isolation import REAL_ROOT  # noqa: F401  (must import first)
-
 import frontend  # noqa: E402
-from workflow.lib import jobs, s3_storage  # noqa: E402
-
-from tests.test_batching import Base, token_for, _REAL_POPEN  # noqa: E402
+from tests._isolation import REAL_ROOT  # noqa: F401  (must import first)
+from tests.test_batching import _REAL_POPEN, Base, token_for  # noqa: E402
 from tests.test_s3_streaming import FakeS3  # noqa: E402
+from workflow.helpers import jobs, s3_storage  # noqa: E402
 
 _LONG_AGO = time.time() - (30 * 24 * 60 * 60)  # a month back: well past every TTL
 

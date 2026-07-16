@@ -9,8 +9,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path.cwd()))
 
-from workflow.lib.bvbrc_client import BVBRCClient
-from workflow.lib.utils import setup_logger
+from workflow.helpers.bvbrc_client import BVBRCClient
+from workflow.helpers.utils import setup_logger
 
 logger = setup_logger("bvbrc_cga", snakemake.log[0])
 
@@ -66,11 +66,11 @@ if not job_id:
 	assembly_method = snakemake.config["bvbrc"]["assembly_method"]
 
 	params = {
-	 "r1_file": r1_remote,
-	 "r2_file": r2_remote,
-	 "output_name": f"cga_{sample_id}",
-	 "taxonomy_id": taxonomy_id,
-	 "assembly_method": assembly_method,
+		"r1_file": r1_remote,
+		"r2_file": r2_remote,
+		"output_name": f"cga_{sample_id}",
+		"taxonomy_id": taxonomy_id,
+		"assembly_method": assembly_method,
 	}
 
 	if genus != "Unknown":
@@ -86,7 +86,7 @@ logger.info(f"Job ID: {job_id}")
 
 poll_interval = snakemake.config["bvbrc"]["poll_interval"]
 is_complete, final_status = client.wait_for_job(
- job_id, max_wait_seconds=max_wait, poll_interval=poll_interval
+	job_id, max_wait_seconds=max_wait, poll_interval=poll_interval
 )
 
 if not is_complete:
@@ -102,8 +102,8 @@ logger.info("Comprehensive Genome Analysis complete")
 # empty assembly and corrupts every downstream step (RGI, novelty, reports).
 output_name = f"cga_{sample_id}"
 result_roots = [
- f"{workspace}/{output_name}",
- f"{workspace}/.{output_name}",
+	f"{workspace}/{output_name}",
+	f"{workspace}/.{output_name}",
 ]
 
 logger.info(f"Locating CGA results under {result_roots}...")
@@ -113,8 +113,8 @@ for result_root in result_roots:
 
 if not remote_file_entries:
 	raise RuntimeError(
-	 f"No CGA result files found for {sample_id} under {result_roots}. "
-	 f"Job {job_id} reported complete but produced no downloadable output."
+		f"No CGA result files found for {sample_id} under {result_roots}. "
+		f"Job {job_id} reported complete but produced no downloadable output."
 	)
 
 
@@ -133,17 +133,19 @@ def _name(remote_entry):
 
 # Assembly contigs: prefer an explicit contigs FASTA, then any assembly FASTA/FNA.
 assembly_remote = _resolve(
- [
-  lambda remote_entry: _name(remote_entry).endswith((".fasta", ".fna", ".fa")) and "contig" in _name(remote_entry),
-  lambda remote_entry: _name(remote_entry).endswith((".fasta", ".fna", ".fa")) and "assembl" in _name(remote_entry),
-  lambda remote_entry: remote_entry["type"] == "contigs",
-  lambda remote_entry: _name(remote_entry).endswith((".fna", ".fasta", ".fa")),
- ]
+	[
+		lambda remote_entry: _name(remote_entry).endswith((".fasta", ".fna", ".fa"))
+		and "contig" in _name(remote_entry),
+		lambda remote_entry: _name(remote_entry).endswith((".fasta", ".fna", ".fa"))
+		and "assembl" in _name(remote_entry),
+		lambda remote_entry: remote_entry["type"] == "contigs",
+		lambda remote_entry: _name(remote_entry).endswith((".fna", ".fasta", ".fa")),
+	]
 )
 if not assembly_remote:
 	raise RuntimeError(
-	 f"Could not find an assembly FASTA in CGA results for {sample_id}. "
-	 f"Files seen: {[remote_entry['path'] for remote_entry in remote_file_entries]}"
+		f"Could not find an assembly FASTA in CGA results for {sample_id}. "
+		f"Files seen: {[remote_entry['path'] for remote_entry in remote_file_entries]}"
 	)
 
 logger.info(f"Downloading assembly: {assembly_remote}")
@@ -152,15 +154,16 @@ if not client.download_file(assembly_remote, assembly_fasta):
 
 # Genome report: prefer an explicit genome_report.json, then any genome/report JSON.
 report_remote = _resolve(
- [
-  lambda remote_entry: _name(remote_entry) == "genome_report.json",
-  lambda remote_entry: _name(remote_entry).endswith(".json") and ("genome" in _name(remote_entry) or "report" in _name(remote_entry)),
- ]
+	[
+		lambda remote_entry: _name(remote_entry) == "genome_report.json",
+		lambda remote_entry: _name(remote_entry).endswith(".json")
+		and ("genome" in _name(remote_entry) or "report" in _name(remote_entry)),
+	]
 )
 if not report_remote:
 	raise RuntimeError(
-	 f"Could not find a genome report JSON in CGA results for {sample_id}. "
-	 f"Files seen: {[remote_entry['path'] for remote_entry in remote_file_entries]}"
+		f"Could not find a genome report JSON in CGA results for {sample_id}. "
+		f"Files seen: {[remote_entry['path'] for remote_entry in remote_file_entries]}"
 	)
 
 logger.info(f"Downloading genome report: {report_remote}")
@@ -168,10 +171,11 @@ if not client.download_file(report_remote, genome_report):
 	raise RuntimeError(f"Failed to download genome report from {report_remote}")
 
 html_remote = _resolve(
- [
-  lambda remote_entry: _name(remote_entry) == "fullgenomereport.html",
-  lambda remote_entry: _name(remote_entry).endswith(".html") and ("full" in _name(remote_entry) or "genome" in _name(remote_entry)),
- ]
+	[
+		lambda remote_entry: _name(remote_entry) == "fullgenomereport.html",
+		lambda remote_entry: _name(remote_entry).endswith(".html")
+		and ("full" in _name(remote_entry) or "genome" in _name(remote_entry)),
+	]
 )
 if html_remote:
 	logger.info(f"Downloading HTML report: {html_remote}")
