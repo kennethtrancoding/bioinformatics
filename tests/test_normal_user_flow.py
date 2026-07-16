@@ -99,7 +99,7 @@ class NormalUserFlow(Base):
 
 	def cloud_import(self, sample_name, job_id=None):
 		"""Pull a pair from a Google Drive share link, over the real code path."""
-		r1, r2 = fastq_bytes(), fastq_bytes(2)
+		r1, r2 = fastq_bytes(1, "r1"), fastq_bytes(1, "r2")
 		drive = FakeDrive(
 			{
 				"FOLDER1": {"name": "Run", "mimeType": cloud_import._GOOGLE_FOLDER_MIME},

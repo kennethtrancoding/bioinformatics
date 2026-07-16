@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path.cwd()))
-from workflow.helpers.preprocess import count_fastq_records, validate_sample_files
+from workflow.helpers.preprocess import validate_sample_files
 from workflow.helpers.utils import compute_md5
 
 first_read_path = snakemake.input.first_read
@@ -21,7 +21,7 @@ Path(report_file).parent.mkdir(parents=True, exist_ok=True)
 
 sample = {"isolate_id": sample_id, "R1_path": first_read_path, "R2_path": second_read_path}
 
-is_valid, errors = validate_sample_files(sample)
+is_valid, errors, record_counts = validate_sample_files(sample)
 
 # Always record each read's MD5 for provenance; verify it against the sequencing
 # company's expected checksums when they're available. import_samples writes those
@@ -61,12 +61,8 @@ metrics = {
 	"r2_size_bytes": Path(second_read_path).stat().st_size
 	if Path(second_read_path).exists()
 	else 0,
-	"r1_record_estimate": count_fastq_records(first_read_path)
-	if Path(first_read_path).exists()
-	else 0,
-	"r2_record_estimate": count_fastq_records(second_read_path)
-	if Path(second_read_path).exists()
-	else 0,
+	"r1_record_count": record_counts["R1"],
+	"r2_record_count": record_counts["R2"],
 	"r1_md5": r1_md5,
 	"r2_md5": r2_md5,
 	"md5_status": md5_status,
@@ -81,8 +77,8 @@ with open(report_file, "w") as file_handle:
 	file_handle.write(f"Status: {metrics['status']}\n")
 	file_handle.write(f"R1 exists: {metrics['r1_exists']}\n")
 	file_handle.write(f"R2 exists: {metrics['r2_exists']}\n")
-	file_handle.write(f"R1 estimated reads: {metrics['r1_record_estimate']}\n")
-	file_handle.write(f"R2 estimated reads: {metrics['r2_record_estimate']}\n")
+	file_handle.write(f"R1 reads: {metrics['r1_record_count']}\n")
+	file_handle.write(f"R2 reads: {metrics['r2_record_count']}\n")
 	file_handle.write(f"R1 MD5: {r1_md5}\n")
 	file_handle.write(f"R2 MD5: {r2_md5}\n")
 	file_handle.write(f"MD5 check: {md5_status}\n")

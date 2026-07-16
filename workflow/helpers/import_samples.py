@@ -17,6 +17,7 @@ import shutil
 import sys
 from pathlib import Path
 
+from workflow.helpers.preprocess import validate_sample_files
 from workflow.helpers.utils import compute_md5
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -61,20 +62,47 @@ def _norm_name(file_name):
 	return re.sub(r"[^a-z0-9]", "", file_name.lower())
 
 
-def find_stats_xlsx(directory):
-	"""Locate the sequencing company's 'DNA Sequencing Stats.xlsx' in `directory`.
+def _discard_registered_copies(fastq_pair, registered_paths, dest_dir):
+	"""Remove the copies made for a pair that turned out to be unusable, so a bad
+	file is never left behind for the pipeline to find.
 
-	Matches on a normalized name so it still finds the sheet after the web
-	upload's secure_filename rewrite (spaces -> underscores) even when other
-	.xlsx files sit alongside it; if the named sheet isn't present but the
-	folder holds exactly one .xlsx, use that. Returns a Path or None.
+	Only ever deletes copies this import made: an in-place import registers the
+	caller's own files, and deleting those would destroy the originals.
+	"""
+	if not dest_dir:
+		return
+	for read_label, registered_path in registered_paths.items():
+		registered_path = Path(registered_path)
+		if (
+			registered_path.resolve() != Path(fastq_pair[f"{read_label}_path"]).resolve()
+			and registered_path.exists()
+		):
+			registered_path.unlink()
+
+
+def find_stats_workbooks(directory, recursive=False):
+	"""Locate the sequencing company's stats workbooks in `directory`.
+
+	Every .xlsx is a candidate, because a batch assembled from several deliveries
+	carries one workbook per delivery and each one is the only record of its own
+	samples' checksums. Picking a single winner among them silently left every
+	other delivery's reads unverified, which is how a truncated file reaches the
+	pipeline.
+
+	`recursive` must track how the caller paired the FASTQs: a two-run delivery
+	arrives as Run1/ and Run2/ with a workbook inside each, so a lookup shallower
+	than the pairing finds reads whose checksums it cannot see.
+
+	Matches on a normalized name so the sheet is still recognized after the web
+	upload's secure_filename rewrite (spaces -> underscores). Returns a list of
+	Paths, canonically-named sheets first, empty when there are none.
 	"""
 	directory = Path(directory).expanduser().resolve()
 	if not directory.is_dir():
-		return None
+		return []
 	target_workbook_name = _norm_name(STATS_XLSX_NAME)
-	xlsx_paths = []
-	for directory_entry in directory.iterdir():
+	named_workbooks, other_workbooks = [], []
+	for directory_entry in sorted(directory.rglob("*") if recursive else directory.iterdir()):
 		if directory_entry.name.startswith("~$") or not directory_entry.name.lower().endswith(
 			".xlsx"
 		):
@@ -82,9 +110,10 @@ def find_stats_xlsx(directory):
 		if not directory_entry.is_file():
 			continue
 		if _norm_name(directory_entry.name) == target_workbook_name:
-			return directory_entry
-		xlsx_paths.append(directory_entry)
-	return xlsx_paths[0] if len(xlsx_paths) == 1 else None
+			named_workbooks.append(directory_entry)
+		else:
+			other_workbooks.append(directory_entry)
+	return named_workbooks + other_workbooks
 
 
 def load_stats_checksums(xlsx_path):
@@ -313,13 +342,20 @@ def import_directory(
 	"""
 	pairs, warnings = pair_fastqs(directory, recursive=recursive)
 
-	# Company-provided checksums, if the stats workbook is present next to the FASTQs.
+	# Company-provided checksums, from every stats workbook next to the FASTQs.
 	expected_checksums_by_sample, checksum_source_name = {}, None
 	if verify_checksums:
-		stats_workbook_path = find_stats_xlsx(directory)
-		if stats_workbook_path:
+		stats_workbook_paths = find_stats_workbooks(directory, recursive=recursive)
+		if not stats_workbook_paths:
+			# Say so. Silence here reads exactly like a clean verified import.
+			warnings.append(
+				f"No sequencing stats workbook ('{STATS_XLSX_NAME}') found next to these "
+				f"reads, so their MD5s were not verified against the company's."
+			)
+		checksum_source_names = []
+		for stats_workbook_path in stats_workbook_paths:
 			try:
-				expected_checksums_by_sample = load_stats_checksums(stats_workbook_path)
+				workbook_checksums = load_stats_checksums(stats_workbook_path)
 			except ImportError:
 				# Distinct from an unreadable workbook: the dependency is simply
 				# missing, so say so plainly instead of blaming the file.
@@ -328,13 +364,29 @@ def import_directory(
 					f"checksum table could not be read; run 'pip install openpyxl' "
 					f"to enable MD5 verification. Imported without checksum verification."
 				)
-			else:
-				if expected_checksums_by_sample:
-					checksum_source_name = stats_workbook_path.name
-				else:
-					warnings.append(
-						f"Found {stats_workbook_path.name} but it has no readable R1/R2 md5sum columns; imported without checksum verification."
-					)
+				break
+			if not workbook_checksums:
+				warnings.append(
+					f"Found {stats_workbook_path.name} but it has no readable R1/R2 md5sum columns; imported without checksum verification."
+				)
+				continue
+			# Two workbooks disagreeing about one sample means the batch was built
+			# from deliveries that do not agree on what the reads are. Refusing to
+			# guess is the point: the first workbook's value stands and the clash
+			# is reported rather than resolved.
+			for sample_key, checksums in workbook_checksums.items():
+				if sample_key in expected_checksums_by_sample:
+					if expected_checksums_by_sample[sample_key] != checksums:
+						warnings.append(
+							f"{stats_workbook_path.name} disagrees with "
+							f"{checksum_source_names[0]} about {sample_key}'s checksums; "
+							f"kept the first and did not merge the second."
+						)
+					continue
+				expected_checksums_by_sample[sample_key] = checksums
+			checksum_source_names.append(stats_workbook_path.name)
+		if checksum_source_names:
+			checksum_source_name = ", ".join(checksum_source_names)
 
 	manifest_rows = _read_existing(samples_csv)
 	rows_by_isolate_id = {
@@ -368,16 +420,26 @@ def import_directory(
 				f"Checksum mismatch for {fastq_pair['isolate_id']} ({', '.join(mismatched_reads)}; not imported)."
 			)
 			failed.append(fastq_pair["isolate_id"])
-			# Remove copies we just made so a bad file isn't left behind.
-			if dest_dir:
-				for read_label, registered_path in registered_paths.items():
-					registered_path = Path(registered_path)
-					if (
-						registered_path.resolve()
-						!= Path(fastq_pair[f"{read_label}_path"]).resolve()
-						and registered_path.exists()
-					):
-						registered_path.unlink()
+			_discard_registered_copies(fastq_pair, registered_paths, dest_dir)
+			continue
+
+		# A checksum only speaks for the pairs the workbook actually lists, and a
+		# pair with no row is imported unverified -- so this is the only check that
+		# every pair gets. Read both reads through here, where the answer still
+		# reaches the person doing the import.
+		pair_valid, pair_errors, _ = validate_sample_files(
+			{
+				"R1_path": str(registered_paths["R1"]),
+				"R2_path": str(registered_paths["R2"]),
+			}
+		)
+		if not pair_valid:
+			warnings.append(
+				f"{fastq_pair['isolate_id']} is not a usable read pair "
+				f"({'; '.join(pair_errors)}; not imported)."
+			)
+			failed.append(fastq_pair["isolate_id"])
+			_discard_registered_copies(fastq_pair, registered_paths, dest_dir)
 			continue
 
 		worksheet_row = {
