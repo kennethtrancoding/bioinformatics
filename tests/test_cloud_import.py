@@ -29,11 +29,14 @@ from workflow.helpers import cloud_import, jobs  # noqa: E402
 SHARED_FOLDER = "https://drive.google.com/drive/folders/FOLDER1?usp=sharing"
 
 
-def fastq_bytes(records=1):
+def fastq_bytes(records=1, tag="read"):
+	"""`tag` distinguishes an R1 from its R2 without changing the record count:
+	the two mates of a real pair always hold the same number of reads, and the
+	import rejects a pair whose counts disagree."""
 	buf = io.BytesIO()
 	with gzip.GzipFile(fileobj=buf, mode="wb") as fh:
 		for i in range(records):
-			fh.write(f"@read{i}\nACGT\n+\nIIII\n".encode())
+			fh.write(f"@{tag}{i}\nACGT\n+\nIIII\n".encode())
 	return buf.getvalue()
 
 
@@ -381,8 +384,8 @@ class Base(unittest.TestCase):
 class TestGoogleDriveImport(Base):
 	def setUp(self):
 		super().setUp()
-		self.good_r1, self.good_r2 = fastq_bytes(1), fastq_bytes(2)
-		self.mismatch_r1, self.mismatch_r2 = fastq_bytes(3), fastq_bytes(4)
+		self.good_r1, self.good_r2 = fastq_bytes(1, "r1"), fastq_bytes(1, "r2")
+		self.mismatch_r1, self.mismatch_r2 = fastq_bytes(3, "r1"), fastq_bytes(3, "r2")
 
 		def fastq(name, body, content_type="application/octet-stream"):
 			return {
@@ -503,7 +506,7 @@ class TestGoogleDriveImport(Base):
 @unittest.skip("Cloud import is disabled; these tests drive the /cloud-import routes.")
 class TestOneDriveImport(Base):
 	def test_shared_onedrive_folder_imports_through_the_content_host(self):
-		r1, r2 = fastq_bytes(1), fastq_bytes(2)
+		r1, r2 = fastq_bytes(1, "r1"), fastq_bytes(1, "r2")
 		onedrive = FakeOneDrive(
 			{
 				"OD1_S9_R1_001.fastq.gz": r1,

@@ -31,11 +31,14 @@ def _fake_popen(argv, **kwargs):
 	return _REAL_POPEN([sys.executable, "-c", f"import time; time.sleep({_RUN_SECONDS})"], **kwargs)
 
 
-def fastq_bytes(records=1):
+def fastq_bytes(records=1, tag="read"):
+	"""`tag` distinguishes an R1 from its R2 without changing the record count:
+	the two mates of a real pair always hold the same number of reads, and the
+	upload rejects a pair whose counts disagree."""
 	buf = io.BytesIO()
 	with gzip.GzipFile(fileobj=buf, mode="wb") as fh:
 		for i in range(records):
-			fh.write(f"@read{i}\nACGT\n+\nIIII\n".encode())
+			fh.write(f"@{tag}{i}\nACGT\n+\nIIII\n".encode())
 	return buf.getvalue()
 
 
@@ -62,7 +65,7 @@ class Base(unittest.TestCase):
 		frontend._pipeline_aborted_jobs.clear()
 
 	def upload_pair(self, name="SAMP1", r1_checksum=None):
-		r1, r2 = fastq_bytes(), fastq_bytes(2)
+		r1, r2 = fastq_bytes(2, "r1"), fastq_bytes(2, "r2")
 		data = {
 			"fastq_file_1": (io.BytesIO(r1), f"{name}_R1_001.fastq.gz"),
 			"fastq_file_2": (io.BytesIO(r2), f"{name}_R2_001.fastq.gz"),
@@ -161,7 +164,7 @@ class TestSubmit(Base):
 			"/submit",
 			data={
 				"fastq_file_1": (io.BytesIO(payload), "SAMPC_R1_001.fastq.gz"),
-				"fastq_file_2": (io.BytesIO(fastq_bytes(2)), "SAMPC_R2_001.fastq.gz"),
+				"fastq_file_2": (io.BytesIO(fastq_bytes(1, "r2")), "SAMPC_R2_001.fastq.gz"),
 				"fastq_file_1_checksum": md5(payload),
 			},
 			content_type="multipart/form-data",
@@ -660,8 +663,8 @@ class TestLibraries(Base):
 
 		d = ROOT / "data" / "wbtest"
 		d.mkdir(parents=True, exist_ok=True)
-		good_r1, good_r2 = fastq_bytes(), fastq_bytes(2)
-		bad_r1, bad_r2 = fastq_bytes(3), fastq_bytes(4)
+		good_r1, good_r2 = fastq_bytes(1, "r1"), fastq_bytes(1, "r2")
+		bad_r1, bad_r2 = fastq_bytes(3, "r1"), fastq_bytes(3, "r2")
 		(d / "GOOD_S1_R1_001.fastq.gz").write_bytes(good_r1)
 		(d / "GOOD_S1_R2_001.fastq.gz").write_bytes(good_r2)
 		(d / "BAD_S2_R1_001.fastq.gz").write_bytes(bad_r1)

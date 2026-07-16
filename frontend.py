@@ -45,7 +45,7 @@ from workflow.helpers.jobs import (
 	job_samples_csv,
 )
 from workflow.helpers.pipeline_manager import PipelineManager
-from workflow.helpers.preprocess import verify_file_md5
+from workflow.helpers.preprocess import validate_sample_files, verify_file_md5
 from workflow.helpers.retention import RetentionService
 from workflow.helpers.utils import stream_directory_zip
 
@@ -837,6 +837,19 @@ def submit():
 	if not is_valid_isolate_id(isolate_id):
 		_discard_raw_upload(job_id, r1_path, r2_path)
 		return jsonify({"error": "Could not derive a valid isolate ID from the filename"}), 400
+
+	# Read both reads through before accepting the pair. This costs a full pass over
+	# each file, which is why it runs last -- after the cheap checks have had their
+	# chance to reject it -- but a truncated or mismatched pair that gets in here is
+	# not caught until the pipeline uploads it to BV-BRC and BV-BRC refuses it, hours
+	# later and with the run already dead. The person who can fix it is standing here
+	# now, so tell them now.
+	pair_valid, pair_errors, _ = validate_sample_files(
+		{"R1_path": str(r1_path), "R2_path": str(r2_path)}
+	)
+	if not pair_valid:
+		_discard_raw_upload(job_id, r1_path, r2_path)
+		return jsonify({"error": "; ".join(pair_errors), "errors": pair_errors}), 400
 
 	with _job_lock(job_id):
 		existing_isolates = {
