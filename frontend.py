@@ -75,9 +75,22 @@ if _TRUSTED_PROXY_HOPS:
 		x_host=_TRUSTED_PROXY_HOPS,
 	)
 
-# Only the job-ID lookup is rate limited because job IDs grant access to results.
-# In-memory counters are sufficient while Gunicorn is restricted to one worker.
-limiter = Limiter(get_remote_address, app=app, storage_uri="memory://", default_limits=[])
+# Two things here are guessable and grant access to results: a job ID, and the
+# Basic Auth password. Both are rate limited per client address. In-memory
+# counters are sufficient while Gunicorn is restricted to one worker.
+#
+# The default limit costs a request only when it is answered with a 401, so it
+# bounds password guessing without touching legitimate traffic -- an authorized
+# browser polling a run's status never spends from this bucket, while an attacker
+# working through a wordlist spends one per attempt and is refused after ten a
+# minute. Guessing a 401 apart from a 429 does not help them: both refuse.
+limiter = Limiter(
+	get_remote_address,
+	app=app,
+	storage_uri="memory://",
+	default_limits=["10 per minute"],
+	default_limits_deduct_when=lambda response: response.status_code == 401,
+)
 
 # Folder uploads can exceed Werkzeug's default 1,000 form parts.
 app.config["MAX_FORM_PARTS"] = 100_000
@@ -521,7 +534,7 @@ def analysis():
 
 
 @app.route("/job/new", methods=["POST"])
-@limiter.limit("20/minute")
+@limiter.limit("20/minute", override_defaults=False)
 def create_job():
 	"""Reserve one empty job before concurrent browser uploads begin."""
 	job_id = generate_job_id()
@@ -1170,7 +1183,7 @@ def pipeline_status():
 
 
 @app.route("/job/<job_id>")
-@limiter.limit("10/minute")
+@limiter.limit("10/minute", override_defaults=False)
 def job_lookup(job_id):
 	_job_or_400(job_id)
 	if not job_samples_csv(job_id).is_file():

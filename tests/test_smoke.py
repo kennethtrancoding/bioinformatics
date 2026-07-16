@@ -537,6 +537,39 @@ class TestSecurity(Base):
 		finally:
 			frontend._APP_PASSWORD = None
 
+	def test_password_guessing_is_rate_limited(self):
+		"""The password is guessable in a way an authorized session is not, so wrong
+		ones are what the limit spends -- an attacker gets ten tries a minute."""
+		import base64
+
+		frontend._APP_PASSWORD = "s3cret"
+		wrong = {"Authorization": "Basic " + base64.b64encode(b"mentor:wrong").decode()}
+		frontend.limiter.enabled = True
+		try:
+			codes = [self.client.get("/", headers=wrong).status_code for _ in range(12)]
+		finally:
+			frontend.limiter.enabled = False
+			frontend.limiter.reset()
+			frontend._APP_PASSWORD = None
+		self.assertEqual(codes[0], 401, f"first wrong password should be refused: {codes}")
+		self.assertIn(429, codes, f"password guessing was never rate limited: {codes}")
+
+	def test_authorized_traffic_does_not_spend_the_password_limit(self):
+		"""The limit must not cost a legitimate user their session: the browser polls
+		a running job well past ten requests a minute."""
+		import base64
+
+		frontend._APP_PASSWORD = "s3cret"
+		good = {"Authorization": "Basic " + base64.b64encode(b"mentor:s3cret").decode()}
+		frontend.limiter.enabled = True
+		try:
+			codes = [self.client.get("/", headers=good).status_code for _ in range(20)]
+		finally:
+			frontend.limiter.enabled = False
+			frontend.limiter.reset()
+			frontend._APP_PASSWORD = None
+		self.assertEqual(set(codes), {200}, f"authorized requests were rate limited: {codes}")
+
 	def test_job_lookup_is_rate_limited(self):
 		job_id = self.upload_pair("RATE").get_json()["job_id"]
 		frontend.limiter.enabled = True
