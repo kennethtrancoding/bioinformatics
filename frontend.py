@@ -683,6 +683,40 @@ def _job_is_busy(job_id):
 	return _pipeline_manager.is_busy(job_id)
 
 
+def _frozen_samples_response(job_id):
+	"""A job's samples may be added to or deleted from only until its pipeline is
+	first run. Returns an ``(response, status)`` to send back when they are frozen,
+	or None when edits are still allowed.
+
+	Two windows are closed, for two reasons. While a run is queued or running, the
+	manifest and the FASTQ it points at are being read, so a change is either
+	silently ignored or read half-written. Once a run has finished -- completed OR
+	failed -- the samples are the inputs that produced its results, and editing them
+	would leave results that no longer correspond to their inputs. A different set of
+	files is a different job: start a new one."""
+	if _job_is_busy(job_id):
+		return (
+			jsonify(
+				{
+					"error": "This job's pipeline is running or queued. Wait for it "
+					"to finish before changing its samples."
+				}
+			),
+			409,
+		)
+	if _read_job_status(job_id) is not None:
+		return (
+			jsonify(
+				{
+					"error": "This job's pipeline has already run, so its samples are "
+					"locked. Start a new job to analyze a different set of files."
+				}
+			),
+			409,
+		)
+	return None
+
+
 def _resolve_upload_job(requested_job_id):
 	"""The job an upload lands in: the one the caller named, or a brand new one.
 
@@ -697,18 +731,9 @@ def _resolve_upload_job(requested_job_id):
 		return None, (jsonify({"error": "Malformed job ID."}), 400)
 	if not job_samples_csv(requested_job_id).is_file():
 		return None, (jsonify({"error": "Unknown job ID."}), 404)
-	if _job_is_busy(requested_job_id):
-		# The pipeline reads the manifest and the raw FASTQ it points at. Adding
-		# samples mid-run would either be silently ignored or read half-written.
-		return None, (
-			jsonify(
-				{
-					"error": "This job's pipeline is running. Wait for it to finish "
-					"before adding more samples."
-				}
-			),
-			409,
-		)
+	frozen = _frozen_samples_response(requested_job_id)
+	if frozen is not None:
+		return None, frozen
 	return requested_job_id, None
 
 
@@ -861,6 +886,9 @@ def delete_file():
 	request_data = request.get_json(silent=True) or {}
 	job_id = request_data.get("job_id")
 	_job_or_400(job_id)
+	frozen = _frozen_samples_response(job_id)
+	if frozen is not None:
+		return frozen
 	uploaded_file_names = request_data.get("files", [])
 
 	data_dir = job_data_dir(job_id)
