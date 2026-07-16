@@ -116,7 +116,7 @@ class S3Base(Base):
 
 class TestUploadReachesS3DuringTheUpload(S3Base):
 	def test_a_pair_is_in_s3_by_the_time_the_request_returns(self):
-		r1, r2 = fastq_bytes(3), fastq_bytes(4)
+		r1, r2 = fastq_bytes(3, "r1"), fastq_bytes(3, "r2")
 		response = self.client.post(
 			"/submit",
 			data={
@@ -182,7 +182,7 @@ class TestS3MustNeverCostUsTheFile(S3Base):
 	def test_an_s3_failure_mid_stream_still_writes_the_whole_file_to_disk(self):
 		"""The local copy is what the pipeline reads. If the tee stopped when S3 did,
 		the run would silently analyse a truncated FASTQ."""
-		r1, r2 = fastq_bytes(50), fastq_bytes(60)
+		r1, r2 = fastq_bytes(50, "r1"), fastq_bytes(50, "r2")
 		response = self.client.post(
 			"/submit",
 			data={
@@ -208,12 +208,12 @@ class TestReadsComeBackForTheRun(S3Base):
 	def test_a_released_read_can_be_fetched_again_from_s3(self):
 		"""The round trip the whole design rests on: if a read cannot come back, the
 		run has nothing to analyse."""
-		r1 = fastq_bytes(7)
+		r1 = fastq_bytes(7, "r1")
 		response = self.client.post(
 			"/submit",
 			data={
 				"fastq_file_1": (io.BytesIO(r1), "TRIP_R1_001.fastq.gz"),
-				"fastq_file_2": (io.BytesIO(fastq_bytes(8)), "TRIP_R2_001.fastq.gz"),
+				"fastq_file_2": (io.BytesIO(fastq_bytes(7, "r2")), "TRIP_R2_001.fastq.gz"),
 			},
 			content_type="multipart/form-data",
 		)
@@ -336,7 +336,7 @@ class TestRejectedUploadsLeaveNothingBehind(S3Base):
 	def test_a_checksum_failure_deletes_the_s3_copy_too(self):
 		"""An upload now reaches S3 before it has been verified, so a file rejected
 		afterwards would otherwise linger in the bucket as bad data forever."""
-		r1, r2 = fastq_bytes(3), fastq_bytes(4)
+		r1, r2 = fastq_bytes(3, "r1"), fastq_bytes(3, "r2")
 		response = self.client.post(
 			"/submit",
 			data={

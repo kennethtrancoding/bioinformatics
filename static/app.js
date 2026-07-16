@@ -413,19 +413,24 @@ function importSummary(d) {
 		msg += " Uploaded in " + formatDuration(d.upload.seconds) + ".";
 	}
 	if (d.checksum_source) {
-		msg +=
-			" Checksums (" +
-			d.checksum_source +
-			"): " +
-			d.verified.length +
-			" verified" +
-			(d.failed.length ? ", " + d.failed.length + " FAILED" : "") +
-			".";
+		msg += " Checksums (" + d.checksum_source + "): " + d.verified.length + " verified.";
 	}
 	if (d.skipped) {
-		msg += " " + d.skipped + " skipped (" + d.warnings.join("; ") + ")";
+		msg += " " + d.skipped + " skipped.";
 	}
-	return msg + ")";
+	msg += ")";
+	// Anything the import refused, and why, said plainly rather than folded into
+	// the counts. A rejected pair used to surface only when a workbook had been
+	// read and only as a bare number, so a truncated read imported from a folder
+	// with no workbook -- the exact way one reached the pipeline -- showed nothing
+	// at all here and failed hours later mid-run instead.
+	if (d.failed && d.failed.length) {
+		msg += "\nNot imported (" + d.failed.length + "): " + d.failed.join(", ") + ".";
+	}
+	if (d.warnings && d.warnings.length) {
+		msg += "\n" + d.warnings.join("\n");
+	}
+	return msg;
 }
 
 // After any upload, point the batch options at the job it landed in, so
@@ -835,6 +840,7 @@ document.getElementById("submit").addEventListener("click", async function (even
 
 function deletePair(f1, f2, btn) {
 	if (!currentJobId) return;
+
 	fetch("/delete", {
 		method: "DELETE",
 		headers: { "Content-Type": "application/json" },

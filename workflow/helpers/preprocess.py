@@ -29,35 +29,59 @@ def is_gzipped_fastq(file_path: str) -> bool:
 	return file_path.endswith(".fastq.gz") or file_path.endswith(".fq.gz")
 
 
-def count_fastq_records(file_path: str, sample_size: int = 1000) -> int:
+def scan_fastq(file_path: str) -> Tuple[int, str]:
 	"""
-	Count approximate number of FASTQ records (sampled).
-	A FASTQ record is 4 lines.
+	Read a FASTQ end to end, returning its exact record count.
+
+	The whole file is read deliberately. A gzip member only proves itself
+	complete at its very end, where the CRC and uncompressed-length trailer sit,
+	so any scan that stops early cannot distinguish a whole file from one whose
+	download was cut short -- and a truncated R2 is accepted by upload and
+	rejected server-side hours later, which is expensive to diagnose.
 
 	Args:
 	    file_path: Path to FASTQ file
-	    sample_size: Number of records to sample (for speed)
 
 	Returns:
-	    Estimated total record count, or -1 if error
+	    Tuple of (record_count, message); record_count is -1 when unreadable
 	"""
+	open_func = gzip.open if is_gzipped_fastq(file_path) else open
+
+	line_count = 0
 	try:
-		open_func = gzip.open if is_gzipped_fastq(file_path) else open
-
-		line_count = 0
 		with open_func(file_path, "rt") as file_handle:
-			for line_index, fastq_line in enumerate(file_handle):
-				if line_index >= sample_size * 4:
-					break
+			for fastq_line in file_handle:
 				line_count += 1
-
-		estimated_total = (line_count // 4) if line_count > 0 else 0
-		return (
-			estimated_total if estimated_total == 0 else int((estimated_total / sample_size) * 1e5)
-		)
+	except EOFError as exception:
+		return -1, f"compressed stream ends mid-record, file is truncated: {exception}"
+	except OSError as exception:
+		return -1, f"file read error: {exception}"
 	except Exception as exception:
-		logger.error(f"Failed to count FASTQ records in {file_path}: {exception}")
-		return -1
+		return -1, f"unexpected error: {exception}"
+
+	if line_count == 0:
+		return -1, "file contains no FASTQ records"
+
+	if line_count % 4 != 0:
+		return -1, f"line count ({line_count}) is not divisible by 4 (truncated?)"
+
+	return line_count // 4, "OK"
+
+
+def count_fastq_records(file_path: str) -> int:
+	"""
+	Count the FASTQ records in a file.
+
+	Args:
+	    file_path: Path to FASTQ file
+
+	Returns:
+	    Exact record count, or -1 if error
+	"""
+	record_count, message = scan_fastq(file_path)
+	if record_count < 0:
+		logger.error(f"Failed to count FASTQ records in {file_path}: {message}")
+	return record_count
 
 
 def validate_fastq_integrity(file_path: str) -> Tuple[bool, str]:
@@ -76,25 +100,11 @@ def validate_fastq_integrity(file_path: str) -> Tuple[bool, str]:
 	if Path(file_path).stat().st_size == 0:
 		return False, f"File is empty: {file_path}"
 
-	try:
-		open_func = gzip.open if is_gzipped_fastq(file_path) else open
+	record_count, message = scan_fastq(file_path)
+	if record_count < 0:
+		return False, message
 
-		with open_func(file_path, "rt") as file_handle:
-			line_count = 0
-			for fastq_line in file_handle:
-				line_count += 1
-				if line_count > 100000:
-					break
-
-			if line_count % 4 != 0:
-				return False, f"FASTQ line count ({line_count}) is not divisible by 4 (corrupted?)"
-
-		return True, "OK"
-
-	except (OSError, EOFError, gzip.BadGzipFile) as exception:
-		return False, f"File read error: {exception}"
-	except Exception as exception:
-		return False, f"Unexpected error: {exception}"
+	return True, "OK"
 
 
 # MD5 Verification
@@ -193,7 +203,7 @@ def load_sample_manifest(manifest_file: str) -> List[Dict[str, str]]:
 		return sample_records
 
 
-def validate_sample_files(sample: Dict[str, str]) -> Tuple[bool, List[str]]:
+def validate_sample_files(sample: Dict[str, str]) -> Tuple[bool, List[str], Dict[str, int]]:
 	"""
 	Validate that sample FASTQ files exist and are readable.
 
@@ -201,30 +211,53 @@ def validate_sample_files(sample: Dict[str, str]) -> Tuple[bool, List[str]]:
 	    sample: Sample dictionary with R1_path, R2_path
 
 	Returns:
-	    Tuple of (all_valid, list_of_error_messages)
+	    Tuple of (all_valid, list_of_error_messages, record_count_by_read).
+	    The counts are returned because reading them costs a full pass over
+	    every read, and the caller records them alongside the verdict.
 	"""
 	validation_errors = []
+	record_counts = {}
 
+	# These messages are read by whoever is doing the upload, so they name the read
+	# the way the person does ("R2"), not the way the dict key does ("R2_path").
 	for read_type in ["R1_path", "R2_path"]:
+		read_label = read_type.removesuffix("_path")
 		file_path = sample.get(read_type)
 		if not file_path:
-			validation_errors.append(f"Missing {read_type}")
+			validation_errors.append(f"Missing {read_label}")
 			continue
 
 		if not Path(file_path).exists():
-			validation_errors.append(f"{read_type} not found: {file_path}")
+			validation_errors.append(f"{read_label} not found: {file_path}")
 			continue
 
 		file_size = Path(file_path).stat().st_size
 		if file_size == 0:
-			validation_errors.append(f"{read_type} is empty: {file_path}")
+			validation_errors.append(f"{read_label} is empty: {file_path}")
 			continue
 
-		is_valid, validation_message = validate_fastq_integrity(file_path)
-		if not is_valid:
-			validation_errors.append(f"{read_type} integrity check failed: {validation_message}")
+		record_count, validation_message = scan_fastq(file_path)
+		if record_count < 0:
+			validation_errors.append(f"{read_label} is not readable: {validation_message}")
+			continue
 
-	return len(validation_errors) == 0, validation_errors
+		record_counts[read_type] = record_count
+
+	# Both mates of an Illumina pair carry one record per fragment, so unequal
+	# counts mean one of the two files is incomplete even when each is a valid
+	# gzip on its own -- the mates were written by the same run and cannot
+	# legitimately disagree.
+	if len(record_counts) == 2 and record_counts["R1_path"] != record_counts["R2_path"]:
+		validation_errors.append(
+			f"R1/R2 record count mismatch: R1 has {record_counts['R1_path']} reads, "
+			f"R2 has {record_counts['R2_path']} (one mate is incomplete)"
+		)
+
+	counts_by_read = {
+		"R1": record_counts.get("R1_path", -1),
+		"R2": record_counts.get("R2_path", -1),
+	}
+	return len(validation_errors) == 0, validation_errors, counts_by_read
 
 
 # Report Generation

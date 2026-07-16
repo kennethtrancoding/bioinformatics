@@ -71,3 +71,10 @@ button {
 	border-radius: 2px;
 	font-size: 0.95rem;
 }
+
+/* The import summary reports each rejected pair on its own line: a folder of 50
+   can have more than one thing wrong with it, and the reasons are unreadable
+   run together in a paragraph. */
+#import-status {
+	white-space: pre-line;
+}

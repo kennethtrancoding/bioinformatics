@@ -54,8 +54,8 @@ class Base(unittest.TestCase):
 
 	def submit_pair(self, name, job_id=None, **extra):
 		data = {
-			"fastq_file_1": (io.BytesIO(fastq_bytes()), f"{name}_R1_001.fastq.gz"),
-			"fastq_file_2": (io.BytesIO(fastq_bytes(2)), f"{name}_R2_001.fastq.gz"),
+			"fastq_file_1": (io.BytesIO(fastq_bytes(1, "r1")), f"{name}_R1_001.fastq.gz"),
+			"fastq_file_2": (io.BytesIO(fastq_bytes(1, "r2")), f"{name}_R2_001.fastq.gz"),
 			**extra,
 		}
 		if job_id:
@@ -124,7 +124,7 @@ class TestMultipleUploadsPerJob(Base):
 		self.assertEqual(response.status_code, 200)
 		self.assertEqual(response.get_json()["job_id"], job_id)
 
-		r1, r2 = fastq_bytes(1), fastq_bytes(2)
+		r1, r2 = fastq_bytes(1, "r1"), fastq_bytes(1, "r2")
 		onedrive = FakeOneDrive(
 			{
 				"BYCLOUD_S2_R1_001.fastq.gz": r1,
