@@ -1,0 +1,46 @@
+## Weekly CARD/MGEdb/AMRProt refresh. Started by bioinformatics-db-refresh.timer,
+## never enabled directly -- enable the timer, not this unit.
+##
+## Install on the EC2 host:
+##
+##   sudo cp deploy/bioinformatics-db-refresh.{service,timer} /etc/systemd/system/
+##   sudo systemctl daemon-reload
+##   sudo systemctl enable --now bioinformatics-db-refresh.timer
+##   systemctl list-timers bioinformatics-db-refresh.timer   # confirm next elapse
+##
+## Output goes to the journal, not a log file in /var/log (which nothing was
+## rotating):
+##
+##   journalctl -u bioinformatics-db-refresh --since "2 weeks ago"
+
+[Unit]
+Description=Weekly CARD/MGEdb/AMRProt refresh (rebuild image, drain, restart)
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+
+# Runs as the user that owns the checkout, so a rebuild leaves no root-owned
+# files behind in it. `ubuntu` is in the docker group and has passwordless sudo,
+# which is all the script needs (it calls `sudo systemctl restart` itself).
+User=ubuntu
+WorkingDirectory=/home/ubuntu/bioinformatics
+ExecStart=/home/ubuntu/bioinformatics/deploy/refresh-databases.sh
+
+# The script drains before it restarts, waiting up to DRAIN_TIMEOUT_SECONDS (4h
+# by default) for in-flight runs and uploads, with the conda solve on top of
+# that. systemd's default start timeout is 90s and would kill it mid-refresh --
+# and a killed refresh is exactly what leaves a drain flag behind (see below).
+TimeoutStartSec=6h
+
+# The script lifts the drain flag from its own EXIT trap, but a trap does not run
+# if the process is killed outright. A drain flag left set queues every run
+# forever and looks like a hung app, so clear it unconditionally once the unit
+# stops, however it stopped. `-` because a normal run has already removed it, and
+# because the container may legitimately not be up.
+ExecStopPost=-/usr/bin/docker exec bioinformatics rm -f /app/config/jobs/.drain
+
+# No [Install] section on purpose: this unit is triggered by its timer. Enabling
+# it directly would run a rebuild on every boot.

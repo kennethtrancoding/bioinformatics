@@ -57,13 +57,22 @@ three databases.
 
 Rebuilding the image re-solves the per-rule environments, which is what pulls
 fresh CARD and MGEdb. `deploy/refresh-databases.sh` does exactly this and
-restarts the service; run it from cron:
+restarts the service. Run it weekly from the systemd timer in `deploy/`:
 
 ```bash
-sudo crontab -e
-# weekly, Sunday 03:00
-0 3 * * 0 /home/ec2-user/bioinformatics/deploy/refresh-databases.sh >> /var/log/bioinformatics-db-refresh.log 2>&1
+sudo cp deploy/bioinformatics-db-refresh.{service,timer} /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now bioinformatics-db-refresh.timer
+systemctl list-timers bioinformatics-db-refresh.timer   # confirm the next elapse
+journalctl -u bioinformatics-db-refresh                 # read a past refresh
 ```
+
+**Not a crontab line.** The host clock is UTC, so `0 3 * * 0` fires at 03:00 UTC
+— 20:00 Saturday in California, a peak upload window and the worst time to
+restart. Cron here has no `CRON_TZ` support to correct that, so the zone has to
+come from the timer (`OnCalendar=Sun *-*-* 03:00:00 America/Los_Angeles`), which
+also holds 03:00 local across DST. Verify with
+`systemd-analyze calendar "Sun *-*-* 03:00:00 America/Los_Angeles"`.
 
 `.snakemake/` is not on a volume, so the per-rule environments live in the image
 itself: **the image is the database.** That is why refreshing one necessarily

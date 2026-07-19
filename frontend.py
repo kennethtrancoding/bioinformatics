@@ -7,7 +7,9 @@ import subprocess
 import tempfile
 import threading
 import time
+from contextlib import contextmanager
 from datetime import datetime, timezone
+from functools import wraps
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -204,6 +206,51 @@ def _persist_pipeline_queue():
 
 def _is_draining():
 	return _pipeline_manager.is_draining()
+
+
+# Uploads run inside the request that carries them: /submit and /import stage the
+# reads, verify them and push them to S3 before returning. A restart mid-request
+# therefore loses that upload outright -- the client sees a dropped connection and
+# the job keeps whatever partial set of samples was registered before the process
+# went away. Draining pipeline runs is not enough to make a restart safe, because
+# a run is not the only thing in flight; this counts the uploads too, so
+# deploy/refresh-databases.sh can wait for them the same way.
+#
+# Deliberately not a reason to refuse new uploads while draining: a restart that
+# rejects a user's upload has cost them the very thing the drain exists to
+# protect. If uploads keep arriving the refresh simply runs out its timeout and
+# skips, which is the safe end.
+_uploads_lock = threading.Lock()
+_uploads_in_flight = 0
+
+
+@contextmanager
+def _track_upload():
+	"""Count one upload as in flight for as long as its request is running."""
+	global _uploads_in_flight
+	with _uploads_lock:
+		_uploads_in_flight += 1
+	try:
+		yield
+	finally:
+		with _uploads_lock:
+			_uploads_in_flight -= 1
+
+
+def _uploads_in_flight_count():
+	with _uploads_lock:
+		return _uploads_in_flight
+
+
+def _counts_as_upload(view):
+	"""Mark a route as an upload, so a drain waits for it before restarting."""
+
+	@wraps(view)
+	def wrapper(*args, **kwargs):
+		with _track_upload():
+			return view(*args, **kwargs)
+
+	return wrapper
 
 
 # A job can be filled by several uploads, and by different methods at the same
@@ -668,6 +715,9 @@ def api_health():
 				"running": running_count,
 				"queued": queued_count,
 			},
+			# Uploads in flight, for the same reason: restarting under one loses
+			# it. Same contract as pipelines above -- a count, never a job ID.
+			"uploads": {"in_flight": _uploads_in_flight_count()},
 		}
 	)
 
@@ -806,6 +856,7 @@ def _auto_run_if_requested(job_id, form):
 
 
 @app.route("/submit", methods=["POST"])
+@_counts_as_upload
 def submit():
 	upload_started_at = time.time()
 	first_fastq_upload = request.files.get("fastq_file_1")
@@ -947,6 +998,7 @@ def _flatten_single_root(resolved_path):
 
 
 @app.route("/import", methods=["POST"])
+@_counts_as_upload
 def import_folder():
 	upload_started_at = time.time()
 	uploaded_file_names = request.files.getlist("files")

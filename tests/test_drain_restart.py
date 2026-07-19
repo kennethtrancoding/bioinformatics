@@ -11,12 +11,15 @@ These cover the two halves of the fix: the drain that keeps a planned restart fr
 killing anything, and the recovery that cleans up after an unplanned one.
 """
 
+import io
 import sys
+import threading
 import unittest
 
 import frontend  # noqa: E402
 from tests._isolation import REAL_ROOT  # noqa: F401  (must import first)
 from tests.test_batching import _REAL_POPEN, Base, token_for  # noqa: E402
+from tests.test_cloud_import import fastq_bytes  # noqa: E402
 from workflow.helpers import jobs  # noqa: E402
 from workflow.helpers.bvbrc_client import BVBRCClient  # noqa: E402
 
@@ -300,6 +303,67 @@ class TestStartupRecovery(DrainBase):
 		frontend.run_startup_recovery()
 
 		self.assertEqual(list(frontend._pipeline_queue), [])
+
+
+class UploadsAreVisibleToTheDrain(Base):
+	"""deploy/refresh-databases.sh restarts as soon as the app reports nothing in
+	flight, so that number decides what a planned restart is allowed to destroy.
+
+	An upload does its whole job inside the request that carries it -- staging,
+	pairing, checksum verification and the S3 push all happen before the response.
+	If it is not counted, the drain sees an idle app and restarts straight through
+	someone's upload: the connection drops and the job keeps only the samples that
+	happened to be registered first."""
+
+	def health(self):
+		# A client of its own: the upload below is running on another thread, and
+		# sharing one test client across both is asking for a flaky test.
+		return frontend.app.test_client().get("/api/health").get_json()
+
+	def test_idle_app_reports_no_uploads(self):
+		self.assertEqual(self.health()["uploads"]["in_flight"], 0)
+
+	def test_an_upload_in_progress_is_counted(self):
+		entered, release = threading.Event(), threading.Event()
+		real_import = frontend._import_service.import_directory
+
+		def blocking_import(*args, **kwargs):
+			"""Hold the request open inside the import, where a real upload spends
+			its time, so the drain can be asked what it sees."""
+			entered.set()
+			release.wait(10)
+			return real_import(*args, **kwargs)
+
+		frontend._import_service.import_directory = blocking_import
+		self.addCleanup(setattr, frontend._import_service, "import_directory", real_import)
+
+		def post_upload():
+			files = [
+				(io.BytesIO(fastq_bytes()), "Run/INFLIGHT_R1_001.fastq.gz"),
+				(io.BytesIO(fastq_bytes()), "Run/INFLIGHT_R2_001.fastq.gz"),
+			]
+			frontend.app.test_client().post(
+				"/import", data={"files": files}, content_type="multipart/form-data"
+			)
+
+		upload = threading.Thread(target=post_upload)
+		upload.start()
+		try:
+			self.assertTrue(entered.wait(10), "upload never reached the import step")
+			self.assertEqual(
+				self.health()["uploads"]["in_flight"],
+				1,
+				"an upload still inside its request must be visible to the drain",
+			)
+		finally:
+			release.set()
+			upload.join(20)
+
+		self.assertEqual(
+			self.health()["uploads"]["in_flight"],
+			0,
+			"the count must come back down once the upload finishes",
+		)
 
 
 if __name__ == "__main__":
