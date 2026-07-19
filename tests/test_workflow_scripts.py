@@ -293,23 +293,66 @@ class TestAnalysisChain(unittest.TestCase):
             "species_method": "rMLST",
         }))
         blast_csv = WORK / "04_blast" / "blast_results.csv"
-        blast_csv.write_text("query,subject,identity,evalue,title\n"
-                             "orf1,WP_000123.1,99.4,0.0,class A beta-lactamase\n")
+        blast_csv.write_text(
+            "query_gene,card_identity_pct,ncbi_top_hit,ncbi_accession,"
+            "ncbi_identity_pct,ncbi_coverage_pct,source,location,is_novel,note\n"
+            "blaCTX-M-15,84.2,class A beta-lactamase,WP_000123.1,99.4,100.0,"
+            "AMR catalog (local),unknown,yes,\n"
+        )
+        rmlst_raw = WORK / "05_mlst" / "rmlst_raw.json"
+        rmlst_raw.write_text(json.dumps({
+            "fields": {"genus": "Enterobacter", "species": "Enterobacter hormaechei",
+                       "rST": "12345"},
+            "exact_matches": {f"BACT{n:06d}": [{"allele_id": "1"}] for n in range(53)},
+            "taxon_prediction": [{"rank": "SPECIES", "taxon": "Enterobacter hormaechei",
+                                  "support": 98.7,
+                                  "taxonomy": "Pseudomonadota > Enterobacterales"}],
+        }))
         run_script(
             "generate_sample_report.py",
             input=NS(assembly_metrics=WORK / "02_assembly" / "genome_metrics.csv",
-                     card=WORK / "03_resistance" / "rgi_results.csv",
+                     card=WORK / "03_resistance" / "novelty_report.txt",
+                     rgi=WORK / "03_resistance" / "rgi_results.csv",
+                     rgi_json=self.rgi_json,
                      blast=blast_csv,
                      mlst=mlst_json,
-                     mobile_element_finder=WORK / "06_mobile_elements" / "me_summary.csv"),
+                     rmlst_raw=rmlst_raw,
+                     mobile_element_finder=WORK / "06_mobile_elements" / "me_summary.csv",
+                     mge_calls=self.mef_csv,
+                     colocation=WORK / "06_mobile_elements" / "S1_arg_mge_colocation.json",
+                     colocation_calls=WORK / "06_mobile_elements" / "S1_arg_mge_colocation.csv"),
             output=NS(html_report=report),
             params=NS(sample_id="S1"),
             wildcards=NS(sample="S1"),
         )
         html = report.read_text()
         self.assertIn("<!DOCTYPE html>", html)
-        for expected in ["blaCTX-M-15", "Enterobacter hormaechei", "114", "210344"]:
+        # N50 is thousands-separated: BV-BRC prints its own counts that way.
+        for expected in ["blaCTX-M-15", "Enterobacter hormaechei", "114", "210,344"]:
             self.assertIn(str(expected), html, f"missing {expected} in report")
+        # Each tab has to speak its own service's language, which is the whole
+        # point of taking these inputs rather than the summarised ones.
+        for expected in ["Best_Hit_ARO", "Cut_Off", "AMR Gene Family",  # RGI's
+                         "Table 1. Assembly Details",                   # BV-BRC's
+                         "rST", "12345", "53/53", "Predicted taxa",     # PubMLST's
+                         "Per. Ident", "Query Cover", "WP_000123.1",    # NCBI's
+                         "IS26"]:                                       # mefinder's
+            self.assertIn(str(expected), html, f"missing {expected} in report")
+        self.assertNotIn(">None<", html, "a column rendered None for every row")
+        # This fixture's mefinder CSV carries no identity/coverage/allele_len.
+        # A value we do not have must not be rendered as 0% or as "None": both
+        # read as findings about the call rather than as gaps in the input.
+        self.assertNotIn("None bp", html, "missing template length rendered as None")
+        # Cell-anchored: a bare "0.0%" also matches the "80.0%" coverage
+        # threshold that the CARD tab legitimately prints.
+        self.assertNotIn("<td>0.0%</td>", html, "missing identity rendered as a real 0%")
+        self.assertIn("<td>—</td>", html, "missing values should render as an em-dash")
+        # The MEF tab's Resistance column is a CARD/RGI join, not mefinder
+        # output (mefinder 1.1.2 has no --resistance flag). It must say so, or
+        # it reads as something the tool reported.
+        self.assertIn("Resistance (CARD)", html, "resistance column is not attributed to CARD")
+        self.assertIn("--resistance", html, "the provenance note is missing")
+        self.assertIn("on MGE", html, "blaCTX-M-15 overlaps IS26 and should be flagged on-MGE")
 
     def test_09_generate_master_report(self):
         master = TMP_ROOT / "results" / "SCRIPTSMOKE" / "master_report.csv"
@@ -397,9 +440,13 @@ class TestAnalysisChain(unittest.TestCase):
         run_script(
             "generate_sample_report.py",
             input=NS(assembly_metrics=WORK / "02_assembly" / "genome_metrics.csv",
-                     card=xss_rgi, blast="/nonexistent.csv",
+                     card="/nonexistent.txt", rgi=xss_rgi, rgi_json="/nonexistent.json",
+                     blast="/nonexistent.csv",
                      mlst=WORK / "05_mlst" / "mlst_results.json",
-                     mobile_element_finder=WORK / "06_mobile_elements" / "me_summary.csv"),
+                     rmlst_raw="/nonexistent.json",
+                     mobile_element_finder=WORK / "06_mobile_elements" / "me_summary.csv",
+                     mge_calls="/nonexistent.csv", colocation="/nonexistent.json",
+                     colocation_calls="/nonexistent.csv"),
             output=NS(html_report=report),
             params=NS(sample_id="S1"),
             wildcards=NS(sample="S1"),
@@ -413,9 +460,13 @@ class TestAnalysisChain(unittest.TestCase):
         report = TMP_ROOT / "results" / "SCRIPTSMOKE" / "degraded.html"
         run_script(
             "generate_sample_report.py",
-            input=NS(assembly_metrics="/nonexistent.csv", card="/nonexistent.csv",
-                     blast="/nonexistent.csv", mlst="/nonexistent.json",
-                     mobile_element_finder="/nonexistent.csv"),
+            input=NS(assembly_metrics="/nonexistent.csv", card="/nonexistent.txt",
+                     rgi="/nonexistent.csv", rgi_json="/nonexistent.json",
+                     blast="/nonexistent.csv",
+                     mlst="/nonexistent.json", rmlst_raw="/nonexistent.json",
+                     mobile_element_finder="/nonexistent.csv",
+                     mge_calls="/nonexistent.csv", colocation="/nonexistent.json",
+                     colocation_calls="/nonexistent.csv"),
             output=NS(html_report=report),
             params=NS(sample_id="S1"),
             wildcards=NS(sample="S1"),

@@ -83,9 +83,6 @@ the in-image stamp with a developer's local copy. Local/CLI runs that never buil
 an image have no stamp, so the page falls back to the AMR catalog's `.ready` marker,
 and omits the line entirely if neither exists.
 
-This is a different timestamp from the unused `results/.db_update_info.json` below —
-that one is written by a script the pipeline never relies on and is still not shown.
-
 ### What the refresh does to jobs that are running
 
 Snakemake runs as a child of the container, so the restart at the end of a refresh
@@ -144,26 +141,13 @@ that makes a database version reproducible:
 - rgi=6.0.3
 ```
 
-## A note on `workflow/scripts/daily_update_databases.py`
-
-This script runs `pip install --upgrade rgi MobileElementFinder` against
-**whatever interpreter invokes it**, and writes a timestamp to
-`results/.db_update_info.json`.
-
-Because RGI and MobileElementFinder live in Snakemake's per-rule environments
-(see above), that `pip install` targets an interpreter the pipeline never calls.
-It will report success while changing nothing the analysis actually uses. The
-timestamp it writes is not read anywhere — the frontend does not display it.
-
-**Do not rely on this script to keep databases current.** Use the rebuild path
-above. The script is left in place because it is harmless and may still be
-useful if you ever install the tools into the base environment directly.
-
 ## Technical details
 
 - `workflow/rules/setup.smk` declares `rule setup_fresh_databases`, which the
   RGI and MobileElementFinder rules depend on. It only `touch`es the marker file
   `results/<JOB_ID>/.databases_fresh` — it performs no update and branches on no
   configuration. It exists to give those two rules a common ordering dependency.
-- `config/config.yaml`'s `databases.update_packages` list is informational; no
-  rule reads it.
+- Nothing updates a database at run time. A `pip install --upgrade rgi` in the
+  base environment targets an interpreter the pipeline never calls: it reports
+  success while changing nothing the analysis uses. The rebuild above is the only
+  mechanism that moves a database version.

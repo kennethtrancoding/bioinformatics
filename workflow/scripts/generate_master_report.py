@@ -42,6 +42,11 @@ def _resistance_summary(input_path):
 		return beta_lactamase_genes, inactivation_genes
 	with open(input_path, newline="") as file_handle:
 		for csv_row in csv.DictReader(file_handle):
+			# Keep only Perfect/Strict RGI calls. Loose hits are low-identity
+			# partial/homology matches -- a genome yields dozens of them, and they
+			# would otherwise flood these category columns with spurious genes.
+			if (csv_row.get("cut_off") or "").strip().lower() == "loose":
+				continue
 			family = (csv_row.get("amr_gene_family") or "").lower()
 			mechanism = (csv_row.get("resistance_mechanism") or "").lower()
 			gene = csv_row.get("best_hit_aro") or csv_row.get("model_name") or ""
