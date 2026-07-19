@@ -176,5 +176,75 @@ class WorkbookPerSubfolder(unittest.TestCase):
 		)
 
 
+class ChecksumsCarryAcrossUploadRounds(unittest.TestCase):
+	"""A job filled by more than one upload round. A stats workbook entered with
+	one round must verify samples that arrive in a later round of the same job:
+	the sheet lists a whole run, but its FASTQs may be uploaded piecemeal, and a
+	sample uploaded after its checksum should be no less verified than one
+	uploaded with it."""
+
+	def _round(self, directory, job):
+		"""One upload round into `job`'s manifest -- the same samples.csv every
+		round, which is what makes them the same job."""
+		return import_samples.import_directory(
+			directory,
+			samples_csv=ROOT / "config" / "jobs" / job / "samples.csv",
+			dest_dir=directory / "dest",
+		)
+
+	def test_earlier_workbook_verifies_a_later_round_sample(self):
+		job = "CARRYJOB0001"
+		later_r1, later_r2 = fastq_bytes(1, "later_r1"), fastq_bytes(1, "later_r2")
+
+		# Round 1: EARLY's reads arrive with a workbook that lists BOTH EARLY and
+		# LATER -- but LATER's FASTQs are not in this round's folder yet.
+		round1 = ROOT / "data" / "carry_round1"
+		early_r1, early_r2 = write_pair(round1, "EARLY")
+		workbook_at(round1 / "DNA Sequencing Stats.xlsx", [
+			["EARLY", md5(early_r1), md5(early_r2)],
+			["LATER", md5(later_r1), md5(later_r2)],
+		])
+		result1 = self._round(round1, job)
+		self.assertIn("EARLY_S1", result1["verified"])
+
+		# Round 2: LATER's FASTQs, and no workbook anywhere in this round.
+		round2 = ROOT / "data" / "carry_round2"
+		round2.mkdir(parents=True, exist_ok=True)
+		(round2 / "LATER_S1_R1_001.fastq.gz").write_bytes(later_r1)
+		(round2 / "LATER_S1_R2_001.fastq.gz").write_bytes(later_r2)
+		result2 = self._round(round2, job)
+
+		self.assertIn(
+			"LATER_S1",
+			result2["verified"],
+			"round 1's workbook must verify a sample that arrives in round 2",
+		)
+		self.assertNotIn("LATER_S1", result2["failed"])
+
+	def test_later_round_sample_corrupt_against_an_earlier_workbook_is_rejected(self):
+		"""The carry-forward is a real check, not a rubber stamp: reads that do
+		not match the earlier round's workbook are still rejected."""
+		job = "CARRYJOB0002"
+		good_r1, good_r2 = fastq_bytes(1, "good_r1"), fastq_bytes(1, "good_r2")
+
+		round1 = ROOT / "data" / "carry_bad_round1"
+		round1.mkdir(parents=True, exist_ok=True)
+		# Workbook names BADLATER with the checksums of the *good* reads...
+		workbook_at(round1 / "DNA Sequencing Stats.xlsx", [
+			["BADLATER", md5(good_r1), md5(good_r2)],
+		])
+		self._round(round1, job)
+
+		# ...but round 2 delivers different bytes under that sample name.
+		round2 = ROOT / "data" / "carry_bad_round2"
+		round2.mkdir(parents=True, exist_ok=True)
+		(round2 / "BADLATER_S1_R1_001.fastq.gz").write_bytes(fastq_bytes(1, "corrupt_r1"))
+		(round2 / "BADLATER_S1_R2_001.fastq.gz").write_bytes(fastq_bytes(1, "corrupt_r2"))
+		result2 = self._round(round2, job)
+
+		self.assertIn("BADLATER_S1", result2["failed"], "a corrupt later-round sample must be rejected")
+		self.assertNotIn("BADLATER_S1", result2["added"])
+
+
 if __name__ == "__main__":
 	unittest.main()
