@@ -258,7 +258,12 @@ the run with it. Both halves of that are handled:
   flag before it restarts the service. While it is set, new runs are queued rather
   than started (even when slots are free), and the script waits for the running
   ones to finish before restarting — or gives up and leaves the databases
-  untouched, rather than killing a multi-hour assembly. See
+  untouched, rather than killing a multi-hour assembly. It waits on **in-flight
+  uploads too**: `/submit` and `/import` stage, verify and push their reads to S3
+  inside the request, so a restart under one loses that upload. Both counts come
+  from `/api/health` (`pipelines.running`, `uploads.in_flight`). Uploads are still
+  *accepted* while draining — refusing one would cost the user the very thing the
+  drain protects — so if they keep arriving the refresh times out and skips. See
   [DATABASE_UPDATES.md](DATABASE_UPDATES.md).
 - **Unplanned restarts are reconciled on boot.** The queue is persisted to
   `config/jobs/.pipeline_queue.json` (on the config volume) and reloaded at
@@ -322,6 +327,8 @@ deploy/iam-policy-s3-results.json  least-privilege S3 access for the instance ro
 deploy/s3-lifecycle.json        backstop expiry for objects no sweep reached
 deploy/bioinformatics.service   systemd unit (restart on crash and on reboot)
 deploy/refresh-databases.sh     rebuilds the image to refresh CARD/MGEdb
+deploy/bioinformatics-db-refresh.service  runs that script as a systemd unit
+deploy/bioinformatics-db-refresh.timer    fires it Sunday 03:00 America/Los_Angeles
 ```
 
 The `Dockerfile` pre-builds all five per-rule Snakemake environments at image

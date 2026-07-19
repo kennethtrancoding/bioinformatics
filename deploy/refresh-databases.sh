@@ -2,9 +2,10 @@
 # Refresh the pipeline's reference databases on the EC2 host: CARD (RGI), MGEdb
 # (MobileElementFinder), and AMRProt (the local AMR BLAST catalog).
 #
-# Install as a weekly cron job:
-#   sudo crontab -e
-#   0 3 * * 0  /home/ec2-user/bioinformatics/deploy/refresh-databases.sh >> /var/log/bioinformatics-db-refresh.log 2>&1
+# Run weekly from deploy/bioinformatics-db-refresh.timer (install instructions in
+# that unit, and in DATABASE_UPDATES.md). Not a crontab line: this host's clock is
+# UTC, so `0 3 * * 0` fires at 20:00 Saturday Pacific -- a peak upload window --
+# and the cron here has no CRON_TZ to correct it. The timer names the zone.
 #
 # WHY THIS REBUILDS THE IMAGE INSTEAD OF PIP-UPGRADING THE PACKAGES:
 #
@@ -39,6 +40,15 @@
 # refresh is never worth killing a multi-hour assembly, and skipping costs one
 # cycle. The queued runs start by themselves once the new container boots.
 #
+# A run is not the only thing a restart can destroy. /submit and /import do their
+# work inside the request that carries the reads -- staging, checksum verification
+# and the S3 push all happen before the response -- so a restart under an upload
+# loses it, and the user sees a dropped connection with only part of their batch
+# registered. The wait below therefore covers uploads as well as runs. New uploads
+# are still accepted while draining: refusing one would cost the user exactly what
+# the drain is meant to protect, and if they keep arriving the timeout skips the
+# refresh, which is the safe end.
+#
 # The build happens *during* the drain, not after it, so the wait is mostly free:
 # the conda solve is slow, and in-flight runs use that time to finish.
 
@@ -63,12 +73,21 @@ container_is_running() {
 	[ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER" 2>/dev/null || echo false)" = "true" ]
 }
 
-# Number of pipeline runs currently executing, per the app itself. Prints nothing
-# when the app cannot be reached, which the caller treats as "unknown", never as
+# What the app has in flight right now, as "<runs> <uploads>". Prints nothing when
+# the app cannot be reached, which the caller treats as "unknown", never as
 # "idle" -- guessing idle is exactly how you kill a run.
-running_pipelines() {
+#
+# Uploads count for the same reason runs do: /submit and /import stage, verify and
+# push their reads to S3 inside the request, so restarting under one loses that
+# upload outright. Waiting only for runs left that window wide open.
+#
+# `uploads` is read with a default because this script always drains the container
+# it is about to replace -- which, on the deploy that first ships the field, is an
+# older image whose /api/health does not report it. Missing then means 0, and the
+# script behaves exactly as it did before.
+in_flight_counts() {
 	curl -fsS --max-time 10 "$HEALTH_URL" 2>/dev/null \
-		| python3 -c 'import json,sys; print(json.load(sys.stdin)["pipelines"]["running"])' 2>/dev/null
+		| python3 -c 'import json,sys; d=json.load(sys.stdin); print(d["pipelines"]["running"], d.get("uploads",{}).get("in_flight",0))' 2>/dev/null
 }
 
 undrain() {
@@ -94,28 +113,30 @@ trap 'undrain' EXIT
 log "rebuilding image to refresh CARD/MGEdb (in-flight runs continue during the build)..."
 docker build -t "$IMAGE_TAG" .
 
-log "waiting for in-flight runs to finish (timeout ${DRAIN_TIMEOUT_SECONDS}s)..."
+log "waiting for in-flight runs and uploads to finish (timeout ${DRAIN_TIMEOUT_SECONDS}s)..."
 deadline=$(( $(date +%s) + DRAIN_TIMEOUT_SECONDS ))
 while :; do
-	running="$(running_pipelines || true)"
+	counts="$(in_flight_counts || true)"
+	running="${counts%% *}"
+	uploading="${counts##* }"
 
-	if [ "$running" = "0" ]; then
-		log "no runs in flight; safe to restart."
+	if [ "$running" = "0" ] && [ "$uploading" = "0" ]; then
+		log "no runs or uploads in flight; safe to restart."
 		break
 	fi
 
 	if [ "$(date +%s)" -ge "$deadline" ]; then
-		log "SKIPPING refresh: ${running:-an unknown number of} run(s) still in flight after ${DRAIN_TIMEOUT_SECONDS}s."
+		log "SKIPPING refresh: ${running:-an unknown number of} run(s) and ${uploading:-an unknown number of} upload(s) still in flight after ${DRAIN_TIMEOUT_SECONDS}s."
 		log "Databases left unchanged; the new image is built and the next run will reuse it."
 		exit 0  # trap lifts the drain
 	fi
 
-	if [ -z "$running" ]; then
+	if [ -z "$counts" ]; then
 		# Unreachable app. Do not assume idle -- wait and re-ask; if it stays
 		# unreachable we hit the deadline above and skip, which is the safe end.
 		log "app is not answering /api/health; will re-check."
 	else
-		log "waiting for $running run(s) to finish..."
+		log "waiting for $running run(s) and $uploading upload(s) to finish..."
 	fi
 	sleep "$DRAIN_POLL_SECONDS"
 done

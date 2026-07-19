@@ -1,0 +1,33 @@
+## Fires bioinformatics-db-refresh.service weekly. See that unit for how to
+## install and how to read its output.
+##
+## WHY A TIMER AND NOT CRON:
+##
+## This host's clock is UTC, so the obvious crontab line -- `0 3 * * 0` -- does
+## not mean 3am to anyone using the app. It fires at 03:00 UTC, which is 20:00
+## Saturday in California: a peak upload window, and the single worst time to
+## restart the service. Cron can only be told a wall-clock time, not a zone;
+## Debian's cron here has no CRON_TZ support to fix that (`strings` on the binary
+## finds no such variable, so setting it would be silently ignored and the job
+## would keep firing at 20:00 Saturday).
+##
+## systemd takes the zone directly, which also keeps it 03:00 local across DST
+## rather than drifting an hour twice a year. Confirm what it resolves to:
+##
+##   systemd-analyze calendar "Sun *-*-* 03:00:00 America/Los_Angeles"
+
+[Unit]
+Description=Weekly CARD/MGEdb/AMRProt refresh (Sunday 03:00 America/Los_Angeles)
+
+[Timer]
+OnCalendar=Sun *-*-* 03:00:00 America/Los_Angeles
+
+# A refresh missed because the instance was stopped runs once after the next
+# boot instead of silently waiting another week. The drain still protects
+# whatever is in flight when it does.
+Persistent=true
+
+Unit=bioinformatics-db-refresh.service
+
+[Install]
+WantedBy=timers.target
