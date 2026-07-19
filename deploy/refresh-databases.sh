@@ -6,7 +6,7 @@
 #   sudo crontab -e
 #   0 3 * * 0  /home/ec2-user/bioinformatics/deploy/refresh-databases.sh >> /var/log/bioinformatics-db-refresh.log 2>&1
 #
-# WHY THIS REBUILDS THE IMAGE INSTEAD OF RUNNING daily_update_databases.py:
+# WHY THIS REBUILDS THE IMAGE INSTEAD OF PIP-UPGRADING THE PACKAGES:
 #
 # Snakemake runs RGI and MobileElementFinder inside its OWN per-rule conda
 # environments (.snakemake/conda/<hash>/, built from workflow/envs/rgi.yml and

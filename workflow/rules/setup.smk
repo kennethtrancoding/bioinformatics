@@ -1,17 +1,17 @@
 """
-Database Setup Rules: Daily updates via scheduled job
+Database Setup Rules: ordering dependency for the database-backed rules
 
-Databases (RGI/CARD and MobileElementFinder/MGEdb) are updated once per day
-via the external scheduled job daily_update_databases.py. This rule creates
-a marker flag that other rules depend on.
+CARD (RGI) and MGEdb (MobileElementFinder) live in Snakemake's per-rule conda
+environments, so they refresh only when the image is rebuilt -- see
+DATABASE_UPDATES.md. Nothing updates them at run time. This rule performs no
+update; it exists to give those rules a common ordering dependency.
 """
 
 rule setup_fresh_databases:
     """
-    Create marker flag for database availability.
+    Create the marker flag the database-backed rules depend on.
 
-    Actual database updates are managed by an external scheduled job
-    (daily_update_databases.py, run daily via cron or Claude Code scheduler).
+    Databases are image content, refreshed by deploy/refresh-databases.sh.
     """
     output:
         flag = f"{config['results_dir']}/.databases_fresh"
@@ -19,6 +19,6 @@ rule setup_fresh_databases:
         f"{config['results_dir']}/logs/setup_fresh_databases.log"
     shell:
         """
-        echo "Databases updated daily via scheduled job (daily_update_databases.py)" | tee {log}
+        echo "Databases are image content; refreshed by rebuild (see DATABASE_UPDATES.md)" | tee {log}
         touch {output.flag}
         """
