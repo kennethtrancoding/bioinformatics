@@ -315,6 +315,18 @@ class UploadsAreVisibleToTheDrain(Base):
 	someone's upload: the connection drops and the job keeps only the samples that
 	happened to be registered first."""
 
+	def setUp(self):
+		super().setUp()
+		# /api/health probes nine external services on every call, which takes
+		# seconds of real network time. Read through it while an upload is being
+		# held open and the hold expires mid-request: the upload finishes, the
+		# counter drops back to 0, and the assertion below fails for a reason that
+		# has nothing to do with what it is testing. Stub the probe out -- this
+		# test is about the in_flight field, not about reaching PubMLST.
+		real_check_all = frontend.api_registry.check_all
+		frontend.api_registry.check_all = lambda *args, **kwargs: []
+		self.addCleanup(setattr, frontend.api_registry, "check_all", real_check_all)
+
 	def health(self):
 		# A client of its own: the upload below is running on another thread, and
 		# sharing one test client across both is asking for a flaky test.
