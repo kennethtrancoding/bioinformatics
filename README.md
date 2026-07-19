@@ -291,6 +291,18 @@ Raw FASTQ files are deleted by Snakemake after QC and BV-BRC upload no longer
 need them. Finished job results are retained for 3 hours after the first
 terminal status lookup, unless the job has a `.pinned` marker.
 
+**The job ID is deleted with them.** When a job expires, the sweep removes
+everything keyed by that ID in one go: the local results, the raw reads, the
+reports stored in S3, `config/jobs/<JOB_ID>/` (manifest, upload log, checksums,
+endpoint overrides, BV-BRC token) and `logs/<JOB_ID>.log`. The ID stops
+resolving because nothing it named is left. An upload that is never run is
+collected the same way once it has sat unused for 7 days.
+
+Deleting the stored reports is what makes the 3-hour and 7-day windows real
+rather than local-only: the view and download routes fall back to S3 when the
+on-disk copy is gone, so a job whose results were left in the bucket kept
+serving them long after it had been told to expire.
+
 ## Deployment (AWS EC2 + S3)
 
 The app is deployed as a Docker container on a single EC2 instance, with
@@ -307,7 +319,7 @@ Deployment assets live in [deploy/](deploy/):
 deploy/app.env.example          every environment variable the app reads
 deploy/ec2-user-data.sh         installs Docker + git at instance boot
 deploy/iam-policy-s3-results.json  least-privilege S3 access for the instance role
-deploy/s3-lifecycle.json        expires stored results after 90 days
+deploy/s3-lifecycle.json        backstop expiry for objects no sweep reached
 deploy/bioinformatics.service   systemd unit (restart on crash and on reboot)
 deploy/refresh-databases.sh     rebuilds the image to refresh CARD/MGEdb
 ```
@@ -719,16 +731,24 @@ See [Cloud Imports](#cloud-imports-onedrive--google-drive).
 
 ### Results disappeared
 
-Local results are pruned 3 hours after their terminal status is first viewed, or
-after 7 days.
+Results are deleted 3 hours after their terminal status is first viewed, or
+after 7 days — and the job ID goes with them, so an expired ID no longer
+resolves anywhere. That is expected, and it applies to the copies in S3 too: a
+`.pinned` marker is the only thing that holds a job open. A different set of
+files is a new job.
 
-On a deployment with `RESULTS_S3_BUCKET` set, this is mostly invisible: reports
-were uploaded to S3 when the run finished, and the view/download routes fall
-back to S3 automatically. Confirm with:
+The S3 fallback does not extend that window. It exists so a job that has *not*
+expired survives losing its local disk (an instance replaced, a volume
+recreated): the reports were uploaded when the run finished, and the
+view/download routes read them from the bucket when the on-disk copy is missing.
+Check what is still stored for a job with:
 
 ```bash
 aws s3 ls s3://kennethtrancoding-bioinformatics-bucket/results/<JOB_ID>/
 ```
+
+An expired job lists nothing. If a job that should still be live lists nothing
+either, its run never finished successfully — nothing is uploaded until it does.
 
 Without S3 configured, pruned results are gone permanently — download them
 promptly. For demo jobs that should never expire locally, create:

@@ -80,12 +80,6 @@ mobile_elements:
     # contig
     colocation_proximity_bp: 5000
 
-# Database updates run once per day via scheduled job
-# (daily_update_databases.py) Timestamps are displayed on the frontend for
-# transparency
-databases:
-    update_packages: ["rgi", "MobileElementFinder"]
-
 # Resource limits
 resources:
     max_parallel_samples: 4 # Process up to 4 genomes in parallel

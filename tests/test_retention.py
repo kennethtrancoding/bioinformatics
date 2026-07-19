@@ -2,7 +2,9 @@
 
 README contract: a finished job's results are deleted 3h after the user first
 views a terminal status, or 7 days after completion, whichever comes first
-(unless the job carries a .pinned marker).
+(unless the job carries a .pinned marker). The job ID goes with them: nothing
+keyed by an expired ID -- manifest, upload log, token, run log, or the reports
+stored in S3 -- outlives the results it describes.
 """
 
 import json
@@ -19,11 +21,47 @@ VIEW_TTL = frontend._VIEW_TTL_SECONDS
 MAX_TTL = frontend._MAX_TTL_SECONDS
 
 
+class FakeStorage:
+	"""Stands in for s3_storage. The real one is a no-op without a bucket, which
+	would make every "deleted from S3" assertion below pass vacuously."""
+
+	def __init__(self):
+		self.results = {}
+		self.raw = {}
+
+	def add(self, job_id, isolates=("SAMP",)):
+		self.results[job_id] = list(isolates)
+		self.raw[job_id] = ["r1.fastq.gz"]
+
+	def list_isolates(self, job_id):
+		return sorted(self.results.get(job_id, []))
+
+	def delete_results(self, job_id):
+		self.results.pop(job_id, None)
+
+	def delete_raw(self, job_id):
+		self.raw.pop(job_id, None)
+
+
+def make_record(job_id, age=0.0):
+	"""The config/jobs/<id> record every upload leaves behind."""
+	samples = jobs.job_samples_csv(job_id)
+	samples.parent.mkdir(parents=True, exist_ok=True)
+	samples.write_text("isolate_id,R1_path,R2_path\nSAMP,r1.fastq.gz,r2.fastq.gz\n")
+	log_path = jobs.job_log_path(job_id)
+	log_path.parent.mkdir(parents=True, exist_ok=True)
+	log_path.write_text("snakemake log")
+	written_at = time.time() - age
+	os.utime(samples, (written_at, written_at))
+	return samples
+
+
 def make_job(finished_ago=0.0, viewed_ago=None, pinned=False, token=True):
 	job_id = jobs.generate_job_id()
 	results = jobs.job_results_dir(job_id)
 	(results / "SAMP" / "summary").mkdir(parents=True, exist_ok=True)
 	(results / "SAMP" / "summary" / "report.html").write_text("<h1>data</h1>")
+	make_record(job_id, age=finished_ago)
 
 	status = jobs.job_status_path(job_id)
 	status.write_text(json.dumps({"done": True, "success": True, "finished_at": time.time()}))
@@ -45,6 +83,119 @@ def make_job(finished_ago=0.0, viewed_ago=None, pinned=False, token=True):
 		tok.write_text(json.dumps({"access_token": "t", "user_id": "u"}))
 
 	return job_id
+
+
+class TestJobRecordDeletion(unittest.TestCase):
+	"""The job ID is deleted with the contents it names."""
+
+	def setUp(self):
+		self.storage = FakeStorage()
+		self._real_storage = frontend._retention_service.storage
+		frontend._retention_service.storage = self.storage
+		self.addCleanup(
+			setattr, frontend._retention_service, "storage", self._real_storage
+		)
+
+	def test_expired_job_takes_its_id_with_it(self):
+		job_id = make_job(finished_ago=MAX_TTL + 60)
+		self.storage.add(job_id)
+		frontend._sweep_expired_results()
+		self.assertFalse(jobs.job_results_dir(job_id).is_dir(), "results survived")
+		self.assertFalse(jobs.job_config_dir(job_id).exists(), "job ID record outlived its results")
+		self.assertFalse(jobs.job_log_path(job_id).exists(), "run log outlived its job")
+		self.assertEqual(self.storage.list_isolates(job_id), [], "S3 reports outlived their results")
+
+	def test_stored_results_obey_the_view_ttl(self):
+		"""The 3h rule is what the upload page promises; S3 must honour it too,
+		or the view route keeps serving a job that was told to expire."""
+		job_id = make_job(finished_ago=VIEW_TTL + 60, viewed_ago=VIEW_TTL + 1)
+		self.storage.add(job_id)
+		frontend._sweep_expired_results()
+		self.assertEqual(self.storage.list_isolates(job_id), [], "S3 reports ignored the 3h rule")
+		self.assertFalse(jobs.job_config_dir(job_id).exists())
+
+	def test_live_job_keeps_its_id(self):
+		job_id = make_job(finished_ago=60, viewed_ago=60)
+		self.storage.add(job_id)
+		frontend._sweep_expired_results()
+		self.assertTrue(jobs.job_config_dir(job_id).is_dir(), "fresh job lost its record")
+		self.assertEqual(self.storage.list_isolates(job_id), ["SAMP"])
+
+	def test_pinned_job_keeps_its_id(self):
+		job_id = make_job(finished_ago=MAX_TTL * 2, viewed_ago=VIEW_TTL * 2, pinned=True)
+		self.storage.add(job_id)
+		frontend._sweep_expired_results()
+		self.assertTrue(jobs.job_config_dir(job_id).is_dir(), "pinned job lost its record")
+		self.assertEqual(self.storage.list_isolates(job_id), ["SAMP"], "pinned job lost its reports")
+
+	def test_abandoned_upload_id_expires(self):
+		"""An upload that was never run has no results to sweep, so nothing would
+		ever collect its record."""
+		job_id = jobs.generate_job_id()
+		make_record(job_id, age=MAX_TTL + 60)
+		frontend._sweep_expired_results()
+		self.assertFalse(jobs.job_config_dir(job_id).exists(), "abandoned upload kept its ID forever")
+
+	def test_upload_waiting_to_be_run_keeps_its_id(self):
+		"""Same shape as an abandoned one -- a record and no results -- and it
+		must survive, or a job would be deleted between upload and Run."""
+		job_id = jobs.generate_job_id()
+		make_record(job_id, age=60)
+		frontend._sweep_expired_results()
+		self.assertTrue(jobs.job_config_dir(job_id).is_dir(), "pending upload was deleted")
+
+	def test_record_kept_while_stored_results_can_still_be_served(self):
+		"""A job from before delete_results existed: local copy long gone, S3
+		copy still live. The ID has to resolve for as long as the bucket answers."""
+		job_id = jobs.generate_job_id()
+		make_record(job_id, age=MAX_TTL + 60)
+		self.storage.add(job_id)
+		frontend._sweep_expired_results()
+		self.assertTrue(
+			jobs.job_config_dir(job_id).is_dir(),
+			"record deleted while S3 could still serve the job's results",
+		)
+
+	def test_s3_outage_does_not_delete_records(self):
+		"""list_isolates raising must not read as 'no contents left'."""
+
+		def explode(job_id):
+			raise RuntimeError("S3 unreachable")
+
+		self.storage.list_isolates = explode
+		job_id = jobs.generate_job_id()
+		make_record(job_id, age=MAX_TTL + 60)
+		frontend._sweep_expired_results()
+		self.assertTrue(
+			jobs.job_config_dir(job_id).is_dir(), "an S3 outage deleted a job's record"
+		)
+
+	def test_a_failed_s3_delete_keeps_the_id_resolving(self):
+		"""If the reports could not be deleted the bucket can still serve them,
+		and view/download answer on the ID alone. Deleting the record anyway
+		would leave an ID that serves results but has no samples table."""
+
+		def explode(job_id):
+			raise RuntimeError("S3 unreachable")
+
+		self.storage.delete_results = explode
+		job_id = make_job(finished_ago=MAX_TTL + 60)
+		self.storage.add(job_id)
+		frontend._sweep_expired_results()
+		self.assertTrue(
+			jobs.job_config_dir(job_id).is_dir(),
+			"record deleted even though its stored results survived",
+		)
+
+	def test_app_state_files_are_not_job_records(self):
+		"""config/jobs also holds the persisted queue, run history and drain flag."""
+		queue_path = jobs.pipeline_queue_path()
+		queue_path.parent.mkdir(parents=True, exist_ok=True)
+		queue_path.write_text("[]")
+		old = time.time() - (MAX_TTL * 10)
+		os.utime(queue_path, (old, old))
+		frontend._sweep_expired_results()
+		self.assertTrue(queue_path.is_file(), "sweep ate the persisted pipeline queue")
 
 
 class TestRetention(unittest.TestCase):

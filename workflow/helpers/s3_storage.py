@@ -223,15 +223,38 @@ def mark_raw_unrun(job_id: str) -> int:
 	return _set_raw_state(job_id, RAW_UNRUN)
 
 
+def _delete_prefix(prefix: str) -> None:
+	paginator = _client.get_paginator("list_objects_v2")
+	for page in paginator.paginate(Bucket=_BUCKET, Prefix=prefix):
+		object_keys = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
+		if object_keys:
+			_client.delete_objects(Bucket=_BUCKET, Delete={"Objects": object_keys})
+
+
 def delete_raw(job_id: str) -> None:
 	"""Delete every raw upload stored for a job. Best-effort; caller swallows."""
 	if not is_enabled():
 		return
-	paginator = _client.get_paginator("list_objects_v2")
-	for page in paginator.paginate(Bucket=_BUCKET, Prefix=raw_key_for(job_id, "")):
-		object_keys = [{"Key": obj["Key"]} for obj in page.get("Contents", [])]
-		if object_keys:
-			_client.delete_objects(Bucket=_BUCKET, Delete={"Objects": object_keys})
+	_delete_prefix(raw_key_for(job_id, ""))
+
+
+def delete_results(job_id: str) -> None:
+	"""Delete every stored report for a job: the reports the retention sweep is
+	deleting locally at the same moment.
+
+	Without this the sweep only evicted the local cache. The view and download
+	routes fall back to this prefix when the local copy is gone, so a job whose
+	results had supposedly been deleted kept serving them out of the bucket until
+	the 90-day lifecycle rule in deploy/s3-lifecycle.json got to it -- while the
+	upload page promised the user 7 days. The lifecycle rule is the backstop for
+	objects a sweep never reached (an instance replaced before its results
+	expired, say), not the retention policy.
+
+	Best-effort; caller swallows. A failure here leaves objects the lifecycle
+	rule will still collect."""
+	if not is_enabled():
+		return
+	_delete_prefix(key_for(job_id, ""))
 
 
 def list_isolates(job_id: str) -> list:
