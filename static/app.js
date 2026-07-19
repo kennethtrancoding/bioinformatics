@@ -11,6 +11,19 @@ function escapeHtml(value) {
 				.replaceAll("'", "&#39;");
 }
 
+// Reserve the batch before uploading so simultaneous Add actions through
+// different methods all receive the same job ID.
+//
+// Declared up here, above the first thing that reads it, and not next to
+// ensureUploadJob() where it belongs by subject. loadHealth() runs on page load
+// and consults it; being a `let`, reading it before this line is a temporal dead
+// zone error. loadHealth is `async`, so that error surfaced as an unhandled
+// promise rejection rather than a thrown one -- the script kept evaluating and
+// every later handler still bound, so the only visible symptom was the services
+// panel sitting empty until something called it again.
+let currentJobId = null;
+let pendingJobReservation = null;
+
 async function loadHealth() {
 	let status = document.getElementById("health-status");
 	status.textContent = "Checking services...";
@@ -211,11 +224,6 @@ function renderUploads(uploads) {
 		descriptions.join("; ");
 }
 
-// Reserve the batch before uploading so simultaneous Add actions through
-// different methods all receive the same job ID.
-let currentJobId = null;
-let pendingJobReservation = null;
-
 function ensureUploadJob() {
 	if (currentJobId) return Promise.resolve(currentJobId);
 	if (!pendingJobReservation) {
@@ -239,6 +247,46 @@ function addBatchFields(formData) {
 		formData.append("job_id", jobId);
 		return formData;
 	});
+}
+
+// Whether an upload is still sending, and whether the user pressed Run while it
+// was. Run is reachable from the moment the job exists, but during an upload it
+// records the intent instead of starting: a pipeline started against a batch that
+// is still filling would run on whatever subset had landed by then, and this app
+// freezes a job's samples once its pipeline has run -- so the samples still in
+// flight could not be added afterwards.
+let uploadInProgress = false;
+let runAfterUploadRequested = false;
+
+// Show the batch panel as soon as the job ID exists, before any sample has
+// landed. The ID is what the user needs to come back to this batch if they close
+// the tab mid-upload, and Run has to be on screen during the upload for the
+// queue-it-for-later path to exist at all.
+function showJobShell(jobId) {
+	currentJobId = jobId;
+	let settingsUrl = "/settings?job_id=" + encodeURIComponent(jobId);
+	document.getElementById("settings-link").href = settingsUrl;
+	document.getElementById("health-settings-link").href = settingsUrl;
+	document.getElementById("job-view").hidden = false;
+	document.getElementById("job-view-id").textContent = jobId;
+}
+
+function beginUpload() {
+	return ensureUploadJob().then(function (jobId) {
+		showJobShell(jobId);
+		uploadInProgress = true;
+		return jobId;
+	});
+}
+
+// The queued run means "this upload, once it is finished". If it did not finish,
+// honouring it would start the pipeline on a batch that is missing samples -- and
+// freeze it that way -- so the request is dropped, and said so.
+function cancelQueuedRun(reason) {
+	if (!runAfterUploadRequested) return;
+	runAfterUploadRequested = false;
+	document.getElementById("run").disabled = false;
+	document.getElementById("run-status").textContent = reason;
 }
 
 // The job currently shown in the "Your Batch" panel -- whatever was
@@ -531,6 +579,56 @@ function unsentUnits(units) {
 		});
 }
 
+// A dropped connection is not a verdict on the data. The bytes are still here in
+// the browser -- Werkzeug buffers a whole request body before /import ever runs,
+// so a truncated one is discarded without the server having registered anything
+// -- and re-importing a sample the job already holds is harmless, because the
+// manifest updates in place. So a failed batch can simply be sent again.
+//
+// Only transport failures and 5xx are retried. A 4xx is the server's considered
+// answer about these particular reads -- a checksum mismatch, an unusable pair --
+// and re-sending 2 GB to be told the same thing again would dress corrupt data up
+// as a flaky network, burying the finding that verification exists to surface.
+let IMPORT_RETRY_ATTEMPTS = 3;
+let IMPORT_RETRY_BACKOFF_MS = 2000;
+
+function delay(milliseconds) {
+	return new Promise(function (resolve) {
+		setTimeout(resolve, milliseconds);
+	});
+}
+
+// Drop the pairs the job already holds before re-sending a batch. A batch can
+// fail after the server registered some of it (the connection can drop while the
+// reply is coming back), and at ~230 MB a file, re-sending those is an expensive
+// way to learn they were already saved. Non-FASTQ files always ride along: the
+// stats workbook is what decides whether MD5s get checked at all.
+function trimAlreadyRegistered(files) {
+	if (!currentJobId) return Promise.resolve(files);
+	return fetchJob(currentJobId)
+		.then(function (res) {
+			if (!res.ok || !res.d || !res.d.samples) return files;
+			let registeredIsolates = {};
+			res.d.samples.forEach(function (sample) {
+				registeredIsolates[sample.isolate_id] = true;
+			});
+			return files.filter(function (file) {
+				let fileName = basename(uploadName(file));
+				if (!isFastq(fileName)) return true;
+				return !registeredIsolates[isolateIdFor(fileName)];
+			});
+		})
+		.catch(function () {
+			return files;
+		});
+}
+
+function hasFastq(files) {
+	return files.some(function (file) {
+		return isFastq(basename(uploadName(file)));
+	});
+}
+
 function importBatches(units, nonFastqFiles) {
 	// find_stats_xlsx only looks at the top level of the directory it is handed,
 	// and it is what decides whether MD5s get verified at all -- so the stats
@@ -573,7 +671,9 @@ function mergeImportResult(summary, batchResult) {
 	summary.skipped += batchResult.skipped || 0;
 	summary.checksum_source = batchResult.checksum_source || summary.checksum_source;
 	if (batchResult.upload) summary.upload.seconds += batchResult.upload.seconds || 0;
-	summary.job_id = batchResult.job_id;
+	// Never let a reply that omits the job ID erase the one already established:
+	// the batch after it needs it, and afterUpload() renders by it.
+	summary.job_id = batchResult.job_id || summary.job_id;
 	return summary;
 }
 
@@ -596,7 +696,13 @@ function postImportBatch(formData, onBytesSent) {
 				reject(new Error("The server's reply was not readable."));
 				return;
 			}
-			resolve({ ok: request.status >= 200 && request.status < 300, data: data });
+			resolve({
+				ok: request.status >= 200 && request.status < 300,
+				// The caller retries a 5xx but never a 4xx, so it needs the code
+				// itself, not just whether the batch succeeded.
+				status: request.status,
+				data: data,
+			});
 		});
 		request.addEventListener("error", function () {
 			reject(new Error("The connection dropped."));
@@ -616,9 +722,21 @@ document.getElementById("import-btn").addEventListener("click", async function (
 		return;
 	}
 
+	// Reserve the job and put its ID on screen before a byte moves: a folder can
+	// take an hour, and until now the user had nothing to write down or come back
+	// to until it finished.
+	try {
+		await beginUpload();
+	} catch (error) {
+		status.textContent = error.message;
+		return;
+	}
+
 	let grouped = importUnits(files);
 	let units = await unsentUnits(grouped.units);
 	if (grouped.units.length && !units.length) {
+		uploadInProgress = false;
+		cancelQueuedRun("Nothing was uploaded, so no run was started.");
 		status.textContent =
 			"Every sample in this folder is already in the batch — nothing to send.";
 		return;
@@ -643,52 +761,94 @@ document.getElementById("import-btn").addEventListener("click", async function (
 		upload: { seconds: 0 },
 	};
 
+	// Re-rendering the job resets the Run button and clears the run line, so the
+	// cancellation has to be said after that, or the render wipes the one message
+	// explaining why the run the user asked for is not happening.
+	async function giveUp(message) {
+		uploadInProgress = false;
+		status.textContent = message;
+		if (summary.job_id) await afterUpload(summary.job_id);
+		cancelQueuedRun(
+			"The upload did not finish, so the queued run was not started. Import the same folder again to send the rest."
+		);
+	}
+
 	for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
 		let batch = batches[batchIndex];
-		let formData = new FormData();
-		batch.forEach(function (file) {
-			formData.append("files", file, uploadName(file));
-		});
-		try {
-			formData = await addBatchFields(formData);
-		} catch (error) {
-			status.textContent = error.message;
-			return;
-		}
-
 		let batchLabel = `batch ${batchIndex + 1} of ${batches.length}`;
 		let bytesSentBeforeBatch = bytesSent;
-		// Covers the gap before the first progress event: without it the line would
-		// still show the previous batch's numbers while this one spins up.
-		status.textContent = `Uploading ${batchLabel}, starting...`;
+		let result = null;
+		let lastFailure = "";
 
-		let result;
-		try {
-			result = await postImportBatch(formData, function (batchBytesSent, batchBytesTotal) {
-				bytesSent = bytesSentBeforeBatch + batchBytesSent;
-				if (batchBytesSent < batchBytesTotal) {
-					let estimate = "";
-					let elapsedSeconds = (Date.now() - startedAt) / 1000;
-					if (elapsedSeconds >= 5 && bytesSent) {
-						let secondsLeft = ((bytesToSend - bytesSent) / bytesSent) * elapsedSeconds;
-						estimate = `; around ${formatDuration(secondsLeft)} left`;
-					}
-					status.textContent = `Uploading your files, ${batchLabel}. In total, ${formatBytes(bytesSent)} / ${formatBytes(bytesToSend)} (${Math.floor((bytesSent / bytesToSend) * 100)}%) was sent${estimate}`;
-				} else {
-					// The bytes are up but the request is not done: the server still has
-					// to verify each pair's MD5 and push it to S3, which for a 2 GB batch
-					// is not instant. Saying so beats a progress line frozen at 100%.
-					status.textContent = `Uploaded ${batchLabel}; verifying checksums and copying to S3`;
+		for (let attempt = 1; attempt <= IMPORT_RETRY_ATTEMPTS; attempt++) {
+			if (attempt > 1) {
+				// Ask what actually landed before spending the bandwidth again.
+				batch = await trimAlreadyRegistered(batch);
+				if (!hasFastq(batch)) {
+					// The whole batch was registered after all -- the reply was what
+					// went missing, not the data. Nothing left to send.
+					result = { ok: true, status: 200, data: { job_id: currentJobId } };
+					break;
 				}
+				status.textContent = `${lastFailure} Retrying ${batchLabel} (attempt ${attempt} of ${IMPORT_RETRY_ATTEMPTS})...`;
+				await delay(IMPORT_RETRY_BACKOFF_MS * Math.pow(2, attempt - 2));
+			}
+
+			let formData = new FormData();
+			batch.forEach(function (file) {
+				formData.append("files", file, uploadName(file));
 			});
-		} catch (error) {
-			status.textContent = `Import stopped or failed on ${batchLabel}. Everything before it is saved; import the same folder again to send the rest.`;
-			if (summary.job_id) afterUpload(summary.job_id);
+			try {
+				formData = await addBatchFields(formData);
+			} catch (error) {
+				await giveUp(error.message);
+				return;
+			}
+
+			if (attempt === 1) {
+				// Covers the gap before the first progress event: without it the line
+				// would still show the previous batch's numbers while this one spins up.
+				status.textContent = `Uploading ${batchLabel}, starting...`;
+			}
+
+			try {
+				result = await postImportBatch(formData, function (batchBytesSent, batchBytesTotal) {
+					bytesSent = bytesSentBeforeBatch + batchBytesSent;
+					if (batchBytesSent < batchBytesTotal) {
+						let estimate = "";
+						let elapsedSeconds = (Date.now() - startedAt) / 1000;
+						if (elapsedSeconds >= 5 && bytesSent) {
+							let secondsLeft = ((bytesToSend - bytesSent) / bytesSent) * elapsedSeconds;
+							estimate = `; around ${formatDuration(secondsLeft)} left`;
+						}
+						status.textContent = `Uploading your files, ${batchLabel}. In total, ${formatBytes(bytesSent)} / ${formatBytes(bytesToSend)} (${Math.floor((bytesSent / bytesToSend) * 100)}%) was sent${estimate}`;
+					} else {
+						// The bytes are up but the request is not done: the server still has
+						// to verify each pair's MD5 and push it to S3, which for a 2 GB batch
+						// is not instant. Saying so beats a progress line frozen at 100%.
+						status.textContent = `Uploaded ${batchLabel}; verifying checksums and copying to S3`;
+					}
+				});
+			} catch (error) {
+				// Transport: the server never ran /import for this batch.
+				lastFailure = error.message;
+				result = null;
+				continue;
+			}
+			if (result.ok) break;
+			if (result.status < 500) break; // a verdict about the data; sending it again changes nothing
+			lastFailure = (result.data && result.data.error) || "The server errored.";
+			result = null;
+		}
+
+		if (!result) {
+			await giveUp(
+				`Import failed on ${batchLabel} after ${IMPORT_RETRY_ATTEMPTS} attempts (${lastFailure}) Everything before it is saved.`
+			);
 			return;
 		}
 		if (!result.ok) {
-			status.textContent = "Error on " + batchLabel + ": " + result.data.error;
-			if (summary.job_id) afterUpload(summary.job_id);
+			await giveUp("Error on " + batchLabel + ": " + result.data.error);
 			return;
 		}
 
@@ -696,8 +856,17 @@ document.getElementById("import-btn").addEventListener("click", async function (
 		bytesSent = bytesSentBeforeBatch + totalBytes(batch);
 	}
 
+	uploadInProgress = false;
 	status.textContent = importSummary(summary);
-	afterUpload(summary.job_id);
+	await afterUpload(summary.job_id);
+
+	// The whole batch is in, so a run queued during the upload can start now --
+	// and only now, because starting it earlier would have frozen the job around
+	// however many samples had landed at the time.
+	if (runAfterUploadRequested) {
+		runAfterUploadRequested = false;
+		startPipelineRun(document.getElementById("run"));
+	}
 });
 
 /* Cloud import is disabled; the fieldset it drives is commented out in
@@ -806,8 +975,10 @@ document.getElementById("submit").addEventListener("click", async function (even
 		formData.append("fastq_file_1_checksum", checksum1);
 		formData.append("fastq_file_2_checksum", checksum2);
 		try {
+			await beginUpload();
 			formData = await addBatchFields(formData);
 		} catch (error) {
+			uploadInProgress = false;
 			alert(error.message);
 			return;
 		}
@@ -815,7 +986,9 @@ document.getElementById("submit").addEventListener("click", async function (even
 		fetch("/submit", { method: "POST", body: formData })
 			.then((res) => res.json())
 			.then((data) => {
+				uploadInProgress = false;
 				if (data.error) {
+					cancelQueuedRun("The upload failed, so the queued run was not started.");
 					alert(data.error);
 					return;
 				}
@@ -828,10 +1001,19 @@ document.getElementById("submit").addEventListener("click", async function (even
 					" in " +
 					formatDuration(data.upload.seconds) +
 					".";
-				afterUpload(data.job_id);
+				afterUpload(data.job_id).then(function () {
+					if (!runAfterUploadRequested) return;
+					runAfterUploadRequested = false;
+					startPipelineRun(document.getElementById("run"));
+				});
 
 				fileInput1.value = "";
 				fileInput2.value = "";
+			})
+			.catch(function () {
+				uploadInProgress = false;
+				cancelQueuedRun("The upload failed, so the queued run was not started.");
+				alert("Upload failed to contact the server.");
 			});
 	} else {
 		alert("Please select both FASTQ files before submitting.");
@@ -883,7 +1065,22 @@ function pollRunStatus(jobId) {
 
 document.getElementById("run").addEventListener("click", function () {
 	if (!currentJobId) return;
-	let btn = this;
+	// Pressed while the batch is still filling: remember it and start the moment
+	// the last byte is in, rather than running against a partial batch.
+	if (uploadInProgress) {
+		runAfterUploadRequested = true;
+		this.disabled = true;
+		document.getElementById("run-status").textContent =
+			"Queued — the pipeline will start on its own once this upload finishes.";
+		return;
+	}
+	startPipelineRun(this);
+});
+
+// Shared by the Run button and by an upload that finished with a run queued
+// against it, so both take exactly the same path into /run.
+function startPipelineRun(btn) {
+	if (!currentJobId) return;
 	let abortBtn = document.getElementById("abort");
 	let status = document.getElementById("run-status");
 
@@ -923,7 +1120,7 @@ document.getElementById("run").addEventListener("click", function () {
 			status.textContent = "Failed to contact server.";
 			btn.disabled = false;
 		});
-});
+}
 
 document.getElementById("abort").addEventListener("click", function () {
 	if (!currentJobId) return;
