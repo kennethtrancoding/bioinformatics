@@ -38,6 +38,38 @@ STATS_XLSX_NAME = "DNA Sequencing Stats.xlsx"
 # sheet lists just "<sample>", so drop the _S<index> tail to match the two up.
 _SAMPLE_INDEX_RE = re.compile(r"_S\d+.*$")
 
+# A stats workbook names samples by that normalized "Sample Name" (SW4E1), which
+# cannot be tied to a FASTQ's isolate id (SW4E1_S337) until that sample's reads
+# are actually uploaded. A workbook can therefore arrive in one upload round
+# naming samples whose FASTQs only show up in a later round of the same job. This
+# sidecar keeps every workbook's md5s, keyed by that normalized name, for the
+# whole job -- so a checksum entered in one round still verifies a sample that
+# arrives in the next. (checksums.json, keyed by resolved isolate id, is the
+# separate record QC reads; it can only hold samples whose reads have arrived.)
+EXPECTED_CHECKSUMS_SIDECAR = "expected_checksums.json"
+
+
+def _load_expected_checksums(manifest_dir):
+	"""Normalized-sample-name -> {"R1": md5, "R2": md5} recorded by earlier upload
+	rounds of this job. {} when nothing has been recorded yet or the file is
+	unreadable -- a lost sidecar degrades to "verify only this round's workbooks",
+	never to importing something as verified that was not."""
+	sidecar = Path(manifest_dir) / EXPECTED_CHECKSUMS_SIDECAR
+	if not sidecar.exists():
+		return {}
+	try:
+		stored = json.loads(sidecar.read_text())
+	except (OSError, ValueError):
+		return {}
+	return stored if isinstance(stored, dict) else {}
+
+
+def _save_expected_checksums(manifest_dir, expected_checksums_by_sample):
+	"""Persist the job's accumulated normalized-name checksums for future rounds."""
+	sidecar = Path(manifest_dir) / EXPECTED_CHECKSUMS_SIDECAR
+	sidecar.parent.mkdir(parents=True, exist_ok=True)
+	sidecar.write_text(json.dumps(expected_checksums_by_sample, indent=2))
+
 
 def is_fastq(file_name):
 	"""Shared with cloud_import, which uses it to decide what is worth pulling
@@ -342,12 +374,25 @@ def import_directory(
 	"""
 	pairs, warnings = pair_fastqs(directory, recursive=recursive)
 
-	# Company-provided checksums, from every stats workbook next to the FASTQs.
+	# Company-provided checksums. Seed with everything earlier rounds of this job
+	# already recorded, then add this round's workbooks -- so a stats sheet
+	# entered in one upload round verifies samples that only arrive in a later
+	# round, and every sample in the job is checked against every workbook in it.
+	manifest_dir = Path(samples_csv).parent
 	expected_checksums_by_sample, checksum_source_name = {}, None
 	if verify_checksums:
+		expected_checksums_by_sample = _load_expected_checksums(manifest_dir)
+		# Where each already-known checksum came from, for the disagreement
+		# message below; this round's workbooks overwrite it as they are read.
+		checksum_source_by_sample = dict.fromkeys(
+			expected_checksums_by_sample, "a stats workbook from an earlier upload"
+		)
+
 		stats_workbook_paths = find_stats_workbooks(directory, recursive=recursive)
-		if not stats_workbook_paths:
+		if not stats_workbook_paths and not expected_checksums_by_sample:
 			# Say so. Silence here reads exactly like a clean verified import.
+			# A workbook from an earlier round counts: it can cover this round's
+			# reads, so it is not the same as having nothing to verify against.
 			warnings.append(
 				f"No sequencing stats workbook ('{STATS_XLSX_NAME}') found next to these "
 				f"reads, so their MD5s were not verified against the company's."
@@ -379,11 +424,12 @@ def import_directory(
 					if expected_checksums_by_sample[sample_key] != checksums:
 						warnings.append(
 							f"{stats_workbook_path.name} disagrees with "
-							f"{checksum_source_names[0]} about {sample_key}'s checksums; "
-							f"kept the first and did not merge the second."
+							f"{checksum_source_by_sample[sample_key]} about {sample_key}'s "
+							f"checksums; kept the first and did not merge the second."
 						)
 					continue
 				expected_checksums_by_sample[sample_key] = checksums
+				checksum_source_by_sample[sample_key] = stats_workbook_path.name
 			checksum_source_names.append(stats_workbook_path.name)
 		if checksum_source_names:
 			checksum_source_name = ", ".join(checksum_source_names)
@@ -496,6 +542,12 @@ def import_directory(
 			if expected_checksum:
 				persisted_checksums[fastq_pair["isolate_id"]] = expected_checksum
 		checksum_sidecar_path.write_text(json.dumps(persisted_checksums, indent=2))
+
+	# Keep the workbook checksums by normalized sample name too, so a later upload
+	# round can verify samples this workbook named but whose FASTQs have not
+	# arrived yet. Written even when none of this round's pairs matched a row.
+	if verify_checksums and expected_checksums_by_sample:
+		_save_expected_checksums(manifest_dir, expected_checksums_by_sample)
 
 	return {
 		"added": added,
