@@ -82,12 +82,12 @@ class NormalUserFlow(Base):
 		self.addCleanup(self._teardown)
 
 	def _teardown(self):
-		for job_id in list(frontend._pipeline_processes):
+		for job_id in list(frontend._pipeline_manager.processes):
 			self.release(job_id)
-		for pipeline_process in list(frontend._pipeline_processes.values()):
+		for pipeline_process in list(frontend._pipeline_manager.processes.values()):
 			pipeline_process.kill()
-		frontend._pipeline_processes.clear()
-		frontend._pipeline_queue.clear()
+		frontend._pipeline_manager.processes.clear()
+		frontend._pipeline_manager.queue.clear()
 		frontend.MAX_CONCURRENT_PIPELINES = self._real_max
 		frontend.subprocess.Popen = _REAL_POPEN
 		jobs.drain_flag_path().unlink(missing_ok=True)
@@ -196,7 +196,7 @@ class NormalUserFlow(Base):
 			self.assertEqual(self.start(job_id).status_code, 200)
 			self.release(job_id)
 			_wait_until(
-				lambda job_id=job_id: job_id not in frontend._pipeline_processes,
+				lambda job_id=job_id: job_id not in frontend._pipeline_manager.processes,
 				what=f"{job_id} to release its slot",
 			)
 
@@ -211,11 +211,11 @@ class NormalUserFlow(Base):
 
 		self.assertEqual(self.isolates(job_id), ["MIX_CLOUD_S2", "MIX_FOLD_S1", "MIX_PAIR"])
 		# Every upload is recorded, with the method that brought it in.
-		methods = sorted(entry["method"] for entry in frontend._read_uploads(job_id))
+		methods = sorted(entry["method"] for entry in frontend._job_store.read_uploads(job_id))
 		self.assertEqual(methods, ["cloud", "folder", "pair"])
 
 		self.assertEqual(self.start(job_id).status_code, 200)
-		self.assertIn(job_id, frontend._pipeline_processes)
+		self.assertIn(job_id, frontend._pipeline_manager.processes)
 		self.release(job_id)
 
 	def test_slots_fill_then_further_runs_queue_in_order(self):
@@ -243,10 +243,10 @@ class NormalUserFlow(Base):
 		# A finishes -> its slot goes to C, the head of the queue, not to D.
 		self.release(jobs_by_letter["A"])
 		_wait_until(
-			lambda: jobs_by_letter["C"] in frontend._pipeline_processes,
+			lambda: jobs_by_letter["C"] in frontend._pipeline_manager.processes,
 			what="C to be promoted into A's slot",
 		)
-		self.assertEqual(list(frontend._pipeline_queue), [jobs_by_letter["D"]])
+		self.assertEqual(list(frontend._pipeline_manager.queue), [jobs_by_letter["D"]])
 		self.assertEqual(self.health()["running"], 2)
 
 	def test_a_queued_run_can_be_cancelled_before_it_ever_starts(self):
@@ -259,7 +259,7 @@ class NormalUserFlow(Base):
 
 		self.assertEqual(self.client.post("/abort", data={"job_id": waiting}).status_code, 200)
 
-		self.assertNotIn(waiting, frontend._pipeline_queue)
+		self.assertNotIn(waiting, frontend._pipeline_manager.queue)
 		status = self.client.get(f"/status?job_id={waiting}").get_json()
 		self.assertTrue(status["done"])
 		self.assertFalse(status["success"])
@@ -323,7 +323,7 @@ class NormalUserFlow(Base):
 		self.release(instant)
 		for job_id in (aborted, instant):
 			_wait_until(
-				lambda job_id=job_id: job_id not in frontend._pipeline_processes,
+				lambda job_id=job_id: job_id not in frontend._pipeline_manager.processes,
 				what=f"{job_id} to be reaped",
 			)
 		self.assertTrue(self.client.get(f"/status?job_id={instant}").get_json()["success"])
@@ -522,14 +522,14 @@ class NormalUserFlow(Base):
 		self.runnable(job_id)
 
 		manager = frontend._pipeline_manager
-		self.assertEqual(manager.pending_sample_count(job_id), 5)
+		self.assertEqual(manager.pending_work(job_id)[0], 5)
 		self.assertAlmostEqual(manager.estimated_seconds(job_id), five_samples)
 
 		# The run dies with one sample to go. What is left is one sample's work, and
 		# the manifest still says five.
 		for sample_name in sample_names[:-1]:
 			self.complete_sample_on_disk(job_id, sample_name)
-		self.assertEqual(manager.pending_sample_count(job_id), 1)
+		self.assertEqual(manager.pending_work(job_id)[0], 1)
 		self.assertAlmostEqual(manager.estimated_seconds(job_id), one_sample)
 
 		# The re-run is quoted that one sample, and stays quoted it: the estimate is
@@ -555,7 +555,7 @@ class NormalUserFlow(Base):
 		self.assertEqual(run_estimates.calibration(), 1.0)
 
 		# A job with nothing left to do is a Snakemake no-op, not a run of work.
-		self.assertEqual(manager.pending_sample_count(job_id), 0)
+		self.assertEqual(manager.pending_work(job_id)[0], 0)
 		self.assertEqual(run_estimates.estimate_seconds(0, in_flight, cores), 0)
 
 	def test_a_finished_sample_is_recognised_at_the_path_the_pipeline_writes_it_to(self):
@@ -695,12 +695,12 @@ class NormalUserFlow(Base):
 		# queue now would feed a fresh run straight into the restart that is coming.
 		self.release(running_a)
 		_wait_until(
-			lambda: running_a not in frontend._pipeline_processes,
+			lambda: running_a not in frontend._pipeline_manager.processes,
 			what="the running job to finish",
 		)
-		self.assertNotIn(queued_c, frontend._pipeline_processes)
+		self.assertNotIn(queued_c, frontend._pipeline_manager.processes)
 		self.assertEqual(self.health()["running"], 1)
-		self.assertEqual(list(frontend._pipeline_queue), [queued_c, queued_d, queued_e])
+		self.assertEqual(list(frontend._pipeline_manager.queue), [queued_c, queued_d, queued_e])
 
 		# The second finishes too. The host now sees running == 0 and restarts.
 		self.release(running_b)
@@ -711,40 +711,40 @@ class NormalUserFlow(Base):
 			self.assertTrue(self.client.get(f"/status?job_id={job_id}").get_json()["success"])
 
 		# --- the restart itself: a new process, with no memory of either structure.
-		frontend._pipeline_processes.clear()
-		frontend._pipeline_queue.clear()
+		frontend._pipeline_manager.processes.clear()
+		frontend._pipeline_manager.queue.clear()
 		frontend.run_startup_recovery()
 
 		# The queue survived on disk, the drain lifted, and the parked runs started
 		# themselves -- in order, up to the slot limit.
 		self.assertFalse(jobs.drain_flag_path().is_file())
-		self.assertIn(queued_c, frontend._pipeline_processes)
-		self.assertIn(queued_d, frontend._pipeline_processes)
-		self.assertEqual(list(frontend._pipeline_queue), [queued_e])
+		self.assertIn(queued_c, frontend._pipeline_manager.processes)
+		self.assertIn(queued_d, frontend._pipeline_manager.processes)
+		self.assertEqual(list(frontend._pipeline_manager.queue), [queued_e])
 		self.assertEqual(self.health(), {"draining": False, "running": 2, "queued": 1})
 
 		# And the run that only ever waited was not mistaken for one the restart killed.
-		self.assertIsNone(frontend._read_job_status(queued_e))
+		self.assertIsNone(frontend._job_store.read_status(queued_e))
 
 	def test_a_run_killed_by_the_restart_surfaces_as_failed_not_as_silence(self):
 		"""If the refresh does not drain -- or the box simply dies -- the run that was
 		executing must still tell the user something."""
 		victim = self.runnable(self.submit_pair("VICTIM").get_json()["job_id"])
 		self.assertEqual(self.start(victim).status_code, 200)
-		_wait_until(lambda: victim in frontend._pipeline_processes, what="the run to start")
+		_wait_until(lambda: victim in frontend._pipeline_manager.processes, what="the run to start")
 
 		# The container dies. In production the watcher thread dies with the process and
 		# nothing is ever recorded -- but here it is alive in this very interpreter and
 		# will happily write a status of its own. So let it finish first, and only then
 		# clear the status, which is the state a real restart actually leaves behind:
 		# a run that began, and no record of how it ended.
-		frontend._pipeline_processes[victim].kill()
+		frontend._pipeline_manager.processes[victim].kill()
 		_wait_until(
 			lambda: jobs.job_status_path(victim).is_file(),
 			what="the watcher to finish, so it cannot race the recovery",
 		)
-		frontend._pipeline_processes.clear()
-		frontend._pipeline_queue.clear()
+		frontend._pipeline_manager.processes.clear()
+		frontend._pipeline_manager.queue.clear()
 		jobs.job_status_path(victim).unlink()
 
 		frontend.run_startup_recovery()

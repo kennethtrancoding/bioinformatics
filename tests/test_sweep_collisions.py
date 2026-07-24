@@ -50,10 +50,10 @@ class SweepBase(Base):
 		self.addCleanup(self._teardown)
 
 	def _teardown(self):
-		for pipeline_process in list(frontend._pipeline_processes.values()):
+		for pipeline_process in list(frontend._pipeline_manager.processes.values()):
 			pipeline_process.kill()
-		frontend._pipeline_processes.clear()
-		frontend._pipeline_queue.clear()
+		frontend._pipeline_manager.processes.clear()
+		frontend._pipeline_manager.queue.clear()
 		frontend.subprocess.Popen = _REAL_POPEN
 		frontend.MAX_CONCURRENT_PIPELINES = 2
 		jobs.drain_flag_path().unlink(missing_ok=True)
@@ -84,7 +84,7 @@ class TestSweepVersusARunningJob(SweepBase):
 		(results_directory / "partial.csv").write_text("half a run")
 		_age(results_directory)
 
-		frontend._sweep_expired_results()
+		frontend._retention_service.sweep()
 
 		self.assertTrue(
 			(results_directory / "partial.csv").is_file(),
@@ -98,7 +98,7 @@ class TestSweepVersusARunningJob(SweepBase):
 		self.client.post("/run", data={"job_id": job_id})
 		_age(jobs.job_token_path(job_id))
 
-		frontend._sweep_expired_results()
+		frontend._retention_service.sweep()
 
 		self.assertTrue(
 			self.token_exists(job_id), "the sweep destroyed a running job's BV-BRC token"
@@ -111,7 +111,7 @@ class TestSweepVersusARunningJob(SweepBase):
 		self.client.post("/run", data={"job_id": job_id})
 		_age(jobs.job_data_dir(job_id))
 
-		frontend._sweep_expired_results()
+		frontend._retention_service.sweep()
 
 		self.assertTrue(self.raw_in_s3(job_id), "the sweep deleted a running job's inputs")
 
@@ -130,7 +130,7 @@ class TestSweepVersusTheQueue(SweepBase):
 		_running, queued = self._queue_one_behind_a_running_job("Q_RUN_A", "Q_WAIT_A")
 		_age(jobs.job_data_dir(queued))
 
-		frontend._sweep_expired_results()
+		frontend._retention_service.sweep()
 
 		self.assertTrue(self.raw_in_s3(queued), "the sweep deleted a queued job's inputs")
 
@@ -140,7 +140,7 @@ class TestSweepVersusTheQueue(SweepBase):
 		_running, queued = self._queue_one_behind_a_running_job("Q_RUN_B", "Q_WAIT_B")
 		_age(jobs.job_token_path(queued))
 
-		frontend._sweep_expired_results()
+		frontend._retention_service.sweep()
 
 		self.assertTrue(
 			self.token_exists(queued),
@@ -156,11 +156,11 @@ class TestSweepVersusADatabaseRefresh(SweepBase):
 		jobs.drain_flag_path().touch()
 		parked = self.runnable("REFRESH_PARKED")
 		self.assertEqual(self.client.post("/run", data={"job_id": parked}).status_code, 202)
-		self.assertEqual(frontend._is_draining(), True)
+		self.assertEqual(frontend._pipeline_manager.is_draining(), True)
 
 		_age(jobs.job_data_dir(parked))
 		_age(jobs.job_token_path(parked))
-		frontend._sweep_expired_results()
+		frontend._retention_service.sweep()
 
 		self.assertTrue(self.raw_in_s3(parked), "the refresh's parked job lost its inputs")
 		self.assertTrue(self.token_exists(parked), "the refresh's parked job lost its token")
@@ -180,7 +180,7 @@ class TestSweepVersusAdmission(SweepBase):
 		results_directory = jobs.job_results_dir(job_id)
 		results_directory.mkdir(parents=True, exist_ok=True)
 		(results_directory / "master_report.csv").write_text("old results")
-		frontend._write_job_status(job_id, True)
+		frontend._pipeline_manager._write_status(job_id, True)
 		_age(jobs.job_status_path(job_id))
 		jobs.job_first_viewed_path(job_id).touch()
 		_age(jobs.job_first_viewed_path(job_id))
@@ -203,7 +203,7 @@ class TestSweepVersusAdmission(SweepBase):
 			return real_rmtree(path, **kwargs)
 
 		with mock.patch.object(frontend.shutil, "rmtree", _paused_rmtree):
-			sweeper = threading.Thread(target=frontend._sweep_expired_results, daemon=True)
+			sweeper = threading.Thread(target=frontend._retention_service.sweep, daemon=True)
 			sweeper.start()
 			self.assertTrue(decided.wait(timeout=5), "the sweep never reached the deletion")
 
@@ -215,8 +215,8 @@ class TestSweepVersusAdmission(SweepBase):
 		self.assertEqual(run_response.status_code, 410)
 		self.assertIn("expired", run_response.get_json()["error"].lower())
 		# ...and crucially, no run was started on a job being demolished.
-		self.assertNotIn(job_id, frontend._pipeline_processes)
-		self.assertNotIn(job_id, frontend._pipeline_queue)
+		self.assertNotIn(job_id, frontend._pipeline_manager.processes)
+		self.assertNotIn(job_id, frontend._pipeline_manager.queue)
 		# The deletion completed, so the outcome is coherent: nothing half-alive.
 		self.assertFalse(results_directory.exists())
 		self.assertEqual(self.raw_in_s3(job_id), [])
@@ -227,9 +227,9 @@ class TestSweepVersusAdmission(SweepBase):
 		job_id, results_directory = self._expired_finished_job("RERUN_WINS")
 
 		self.assertEqual(self.client.post("/run", data={"job_id": job_id}).status_code, 200)
-		frontend._sweep_expired_results()
+		frontend._retention_service.sweep()
 
-		self.assertIn(job_id, frontend._pipeline_processes)
+		self.assertIn(job_id, frontend._pipeline_manager.processes)
 		self.assertTrue(results_directory.exists(), "the sweep deleted a running job's results")
 		self.assertTrue(self.token_exists(job_id), "the sweep destroyed a running job's token")
 		self.assertTrue(self.raw_in_s3(job_id), "the sweep deleted a running job's inputs")
@@ -242,10 +242,10 @@ class TestTheSweepStillDoesItsJob(SweepBase):
 		results_directory = jobs.job_results_dir(job_id)
 		results_directory.mkdir(parents=True, exist_ok=True)
 		(results_directory / "partial.csv").write_text("failed run")
-		frontend._write_job_status(job_id, False)
+		frontend._pipeline_manager._write_status(job_id, False)
 		_age(jobs.job_status_path(job_id))
 
-		frontend._sweep_expired_results()
+		frontend._retention_service.sweep()
 
 		self.assertFalse(results_directory.exists(), "an expired failed run was not cleaned up")
 
@@ -254,11 +254,11 @@ class TestTheSweepStillDoesItsJob(SweepBase):
 		results_directory = jobs.job_results_dir(job_id)
 		results_directory.mkdir(parents=True, exist_ok=True)
 		(results_directory / "keep.csv").write_text("pinned")
-		frontend._write_job_status(job_id, True)
+		frontend._pipeline_manager._write_status(job_id, True)
 		_age(jobs.job_status_path(job_id))
 		jobs.job_pinned_path(job_id).touch()
 
-		frontend._sweep_expired_results()
+		frontend._retention_service.sweep()
 
 		self.assertTrue((results_directory / "keep.csv").is_file())
 

@@ -17,7 +17,7 @@ import json
 import unittest
 from pathlib import Path
 
-from tests._isolation import TMP_ROOT, REAL_ROOT  # noqa: F401  (must import first)
+from tests._isolation import REAL_ROOT, TMP_ROOT  # noqa: F401  (must import first)
 
 
 def _load(script_name):
@@ -62,16 +62,36 @@ def rgi_json(path, genes):
 def blast_row(qid, accession, identity, coverage, title):
 	"""One outfmt-6 line in the column order blast_ncbi requests."""
 	columns = {
-		"qseqid": qid, "sacc": accession, "pident": str(identity), "length": "300",
-		"mismatch": "5", "gapopen": "0", "qstart": "1", "qend": "300",
-		"sstart": "1", "send": "300", "evalue": "0.0", "bitscore": "600",
-		"qcovs": str(coverage), "staxids": "562", "stitle": title,
+		"qseqid": qid,
+		"sacc": accession,
+		"pident": str(identity),
+		"length": "300",
+		"mismatch": "5",
+		"gapopen": "0",
+		"qstart": "1",
+		"qend": "300",
+		"sstart": "1",
+		"send": "300",
+		"evalue": "0.0",
+		"bitscore": "600",
+		"qcovs": str(coverage),
+		"staxids": "562",
+		"stitle": title,
 	}
 	return "\t".join(columns[name] for name in blast_ncbi._OUTFMT_COLS)
 
 
-def run_blast(rgi_path, out_csv, local_hits=None, remote_hits=None, local_error=None,
-              remote_error=None, db_ready=True, remote_fallback=True, max_queries=0):
+def run_blast(
+	rgi_path,
+	out_csv,
+	local_hits=None,
+	remote_hits=None,
+	local_error=None,
+	remote_error=None,
+	db_ready=True,
+	remote_fallback=True,
+	max_queries=0,
+):
 	"""Drive main() with both BLAST tiers stubbed. Records what each tier was asked."""
 	asked = {"local": None, "remote": None}
 
@@ -94,9 +114,16 @@ def run_blast(rgi_path, out_csv, local_hits=None, remote_hits=None, local_error=
 	blast_ncbi.run_remote_blast = fake_remote
 	blast_ncbi.local_db_is_ready = lambda local_db: db_ready
 
-	argv = ["--rgi-json", str(rgi_path), "--out", str(out_csv),
-	        "--local-db", str(WORK / "amr" / "AMRProt"),
-	        "--max-queries", str(max_queries)]
+	argv = [
+		"--rgi-json",
+		str(rgi_path),
+		"--out",
+		str(out_csv),
+		"--local-db",
+		str(WORK / "amr" / "AMRProt"),
+		"--max-queries",
+		str(max_queries),
+	]
 	if remote_fallback:
 		argv.append("--remote-fallback")
 	try:
@@ -116,7 +143,8 @@ class TestRouting(unittest.TestCase):
 		"""The whole point: the common case must not pay NCBI's queue."""
 		path = rgi_json(WORK / "known.json", [("ACT-12", 99.0, "MKKLLPAT")])
 		rows, asked = run_blast(
-			path, WORK / "known.csv",
+			path,
+			WORK / "known.csv",
 			local_hits=[blast_row("q0_ACT_12", "WP_001", 98.5, 99, "ACT-12 beta-lactamase")],
 		)
 		self.assertEqual(len(rows), 1)
@@ -128,12 +156,16 @@ class TestRouting(unittest.TestCase):
 	def test_only_the_unmatched_enzymes_are_sent_to_ncbi(self):
 		"""The fallback must carry the misses and nothing else -- sending the whole
 		set would reintroduce exactly the 30-minute stall this design removes."""
-		path = rgi_json(WORK / "mixed.json", [
-			("ACT-12", 99.0, "MKKLLPAT"),   # in the catalog
-			("novelX", 55.0, "WWWWCCCC"),   # not in the catalog
-		])
+		path = rgi_json(
+			WORK / "mixed.json",
+			[
+				("ACT-12", 99.0, "MKKLLPAT"),  # in the catalog
+				("novelX", 55.0, "WWWWCCCC"),  # not in the catalog
+			],
+		)
 		rows, asked = run_blast(
-			path, WORK / "mixed.csv",
+			path,
+			WORK / "mixed.csv",
 			local_hits=[blast_row("q1_ACT_12", "WP_001", 98.5, 99, "ACT-12 beta-lactamase")],
 			remote_hits=[blast_row("q0_novelX", "CAA9", 71.2, 90, "hypothetical protein")],
 		)
@@ -148,9 +180,14 @@ class TestRouting(unittest.TestCase):
 		self.assertEqual(by_gene["novelX"]["ncbi_accession"], "CAA9")
 
 	def test_the_cap_takes_the_most_novel_enzymes_first(self):
-		path = rgi_json(WORK / "cap.json", [
-			("high", 99.9, "AAAA"), ("low", 40.0, "BBBB"), ("mid", 70.0, "CCCC"),
-		])
+		path = rgi_json(
+			WORK / "cap.json",
+			[
+				("high", 99.9, "AAAA"),
+				("low", 40.0, "BBBB"),
+				("mid", 70.0, "CCCC"),
+			],
+		)
 		rows, _ = run_blast(path, WORK / "cap.csv", max_queries=2, remote_fallback=False)
 		self.assertEqual([row["query_gene"] for row in rows], ["low", "mid"])
 
@@ -167,7 +204,8 @@ class TestHonesty(unittest.TestCase):
 	def test_a_catalog_hit_below_100pct_is_a_candidate_variant(self):
 		path = rgi_json(WORK / "variant.json", [("ACT-99", 68.0, "MKKL")])
 		rows, _ = run_blast(
-			path, WORK / "variant.csv",
+			path,
+			WORK / "variant.csv",
 			local_hits=[blast_row("q0_ACT_99", "WP_7", 92.0, 98, "ACT-1 beta-lactamase")],
 		)
 		self.assertEqual(rows[0]["is_novel"], "yes")
@@ -175,7 +213,8 @@ class TestHonesty(unittest.TestCase):
 	def test_an_identical_catalog_hit_is_not_novel(self):
 		path = rgi_json(WORK / "exact.json", [("ACT-1", 100.0, "MKKL")])
 		rows, _ = run_blast(
-			path, WORK / "exact.csv",
+			path,
+			WORK / "exact.csv",
 			local_hits=[blast_row("q0_ACT_1", "WP_7", 100.0, 100, "ACT-1 beta-lactamase")],
 		)
 		self.assertEqual(rows[0]["is_novel"], "no")
@@ -183,8 +222,11 @@ class TestHonesty(unittest.TestCase):
 	def test_plasmid_location_is_read_from_the_hit_title(self):
 		path = rgi_json(WORK / "plasmid.json", [("ACT-5", 80.0, "MKKL")])
 		rows, _ = run_blast(
-			path, WORK / "plasmid.csv",
-			local_hits=[blast_row("q0_ACT_5", "WP_9", 95.0, 99, "ACT-5 [Escherichia coli plasmid pX]")],
+			path,
+			WORK / "plasmid.csv",
+			local_hits=[
+				blast_row("q0_ACT_5", "WP_9", 95.0, 99, "ACT-5 [Escherichia coli plasmid pX]")
+			],
 		)
 		self.assertEqual(rows[0]["location"], "plasmid")
 
@@ -193,7 +235,9 @@ class TestFailuresAreNonFatal(unittest.TestCase):
 	def test_an_unbuilt_local_database_does_not_crash_the_step(self):
 		path = rgi_json(WORK / "nodb.json", [("ACT-3", 90.0, "MKKL")])
 		rows, asked = run_blast(
-			path, WORK / "nodb.csv", db_ready=False,
+			path,
+			WORK / "nodb.csv",
+			db_ready=False,
 			remote_hits=[blast_row("q0_ACT_3", "WP_2", 88.0, 95, "ACT-3 beta-lactamase")],
 		)
 		# Local was skipped; everything fell through to NCBI rather than failing.
@@ -202,13 +246,19 @@ class TestFailuresAreNonFatal(unittest.TestCase):
 
 	def test_a_remote_timeout_still_writes_rows_and_keeps_the_catalog_hits(self):
 		"""A dead NCBI must not discard what the local catalog already answered."""
-		path = rgi_json(WORK / "timeout.json", [
-			("ACT-12", 99.0, "MKKL"), ("novelY", 45.0, "WWWW"),
-		])
+		path = rgi_json(
+			WORK / "timeout.json",
+			[
+				("ACT-12", 99.0, "MKKL"),
+				("novelY", 45.0, "WWWW"),
+			],
+		)
 		rows, _ = run_blast(
-			path, WORK / "timeout.csv",
+			path,
+			WORK / "timeout.csv",
 			local_hits=[blast_row("q1_ACT_12", "WP_001", 98.5, 99, "ACT-12 beta-lactamase")],
-			remote_hits=[], remote_error="remote BLAST timed out after 1800s",
+			remote_hits=[],
+			remote_error="remote BLAST timed out after 1800s",
 		)
 		by_gene = {row["query_gene"]: row for row in rows}
 		self.assertEqual(by_gene["ACT-12"]["ncbi_accession"], "WP_001")
@@ -219,7 +269,9 @@ class TestFailuresAreNonFatal(unittest.TestCase):
 	def test_fallback_can_be_disabled_and_then_ncbi_is_never_called(self):
 		path = rgi_json(WORK / "local_only.json", [("novelZ", 40.0, "QQQQ")])
 		rows, asked = run_blast(
-			path, WORK / "local_only.csv", remote_fallback=False,
+			path,
+			WORK / "local_only.csv",
+			remote_fallback=False,
 		)
 		self.assertIsNone(asked["remote"])
 		self.assertEqual(rows[0]["is_novel"], "unknown")
@@ -256,8 +308,11 @@ class TestCatalogBuild(unittest.TestCase):
 		destination = WORK / "dupes_clean.fa"
 		written = build_amr.rewrite_deflines(source, destination)
 
-		ids = [line.split()[0][1:] for line in destination.read_text().splitlines()
-		       if line.startswith(">")]
+		ids = [
+			line.split()[0][1:]
+			for line in destination.read_text().splitlines()
+			if line.startswith(">")
+		]
 		self.assertEqual(written, 2)
 		self.assertEqual(len(set(ids)), 2, f"ids collided: {ids}")
 		self.assertIn("SAME.1", ids)

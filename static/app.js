@@ -249,13 +249,20 @@ function addBatchFields(formData) {
 	});
 }
 
-// Whether an upload is still sending, and whether the user pressed Run while it
-// was. Run is reachable from the moment the job exists, but during an upload it
-// records the intent instead of starting: a pipeline started against a batch that
-// is still filling would run on whatever subset had landed by then, and this app
-// freezes a job's samples once its pipeline has run -- so the samples still in
-// flight could not be added afterwards.
-let uploadInProgress = false;
+// How many uploads are still sending, and whether the user pressed Run while
+// they were. Run is reachable from the moment the job exists, but during an
+// upload it records the intent instead of starting: a pipeline started against a
+// batch that is still filling would run on whatever subset had landed by then,
+// and this app freezes a job's samples once its pipeline has run -- so the
+// samples still in flight could not be added afterwards.
+//
+// A count rather than a flag, because uploads overlap. A folder goes up as
+// several POSTs over many minutes and nothing stops the user adding a pair on
+// top of it; when this was a boolean the pair's completion cleared it and fired
+// the run, with the folder's remaining batches still in the browser. The server
+// then froze the job around what had landed and refused the rest -- the exact
+// outcome deferring the press exists to prevent.
+let uploadsInFlight = 0;
 let runAfterUploadRequested = false;
 
 // Show the batch panel as soon as the job ID exists, before any sample has
@@ -274,14 +281,32 @@ function showJobShell(jobId) {
 function beginUpload() {
 	return ensureUploadJob().then(function (jobId) {
 		showJobShell(jobId);
-		uploadInProgress = true;
+		uploadsInFlight += 1;
 		return jobId;
 	});
 }
 
+// One upload stopped sending, for any reason. Paired with beginUpload(), and
+// only ever called when that one counted this upload -- a reservation that
+// failed never incremented, so decrementing for it would let a run start while
+// another upload is still going.
+function endUpload() {
+	uploadsInFlight = Math.max(0, uploadsInFlight - 1);
+}
+
+// The queued run means "the batch, once it is all in", so it starts when the
+// last upload lands -- not when the first of them happens to finish.
+function startQueuedRunIfReady() {
+	if (!runAfterUploadRequested || uploadsInFlight > 0) return;
+	runAfterUploadRequested = false;
+	startPipelineRun(document.getElementById("run"));
+}
+
 // The queued run means "this upload, once it is finished". If it did not finish,
 // honouring it would start the pipeline on a batch that is missing samples -- and
-// freeze it that way -- so the request is dropped, and said so.
+// freeze it that way -- so the request is dropped, and said so. Dropped whatever
+// else is still in flight: one upload that failed is enough to make the batch
+// not the batch the user asked to run.
 function cancelQueuedRun(reason) {
 	if (!runAfterUploadRequested) return;
 	runAfterUploadRequested = false;
@@ -294,82 +319,65 @@ function cancelQueuedRun(reason) {
 // (Run, Download All, per-sample Delete) act on this job.
 let runPollInterval = null;
 
+// Fill one of the batch panel's tables, or hide it in favour of its empty-state
+// line. buildRow returns the <tr> for one item, so a table that needs event
+// listeners on its cells (Delete) and one that is pure markup share the same
+// clear/populate/toggle handling.
+function renderTable(tableId, emptyId, items, buildRow) {
+	let table = document.getElementById(tableId);
+	let body = table.querySelector("tbody");
+	body.innerHTML = "";
+	items.forEach(function (item) {
+		body.appendChild(buildRow(item));
+	});
+	table.hidden = !items.length;
+	document.getElementById(emptyId).hidden = Boolean(items.length);
+}
+
 function renderJob(jobId, data) {
-	currentJobId = jobId;
-	let settingsUrl = "/settings?job_id=" + encodeURIComponent(jobId);
-	document.getElementById("settings-link").href = settingsUrl;
-	document.getElementById("health-settings-link").href = settingsUrl;
-	document.getElementById("job-view").hidden = false;
-	document.getElementById("job-view-id").textContent = jobId;
+	showJobShell(jobId);
 	renderUploads(data.uploads);
 
-	let sTable = document.getElementById("samples-table");
-	let sBody = sTable.querySelector("tbody");
-	let sEmpty = document.getElementById("samples-empty");
-	sBody.innerHTML = "";
-	if (!data.samples.length) {
-		sTable.hidden = true;
-		sEmpty.hidden = false;
-	} else {
-		data.samples.forEach(function (s) {
-			let row = document.createElement("tr");
-			let f1 = basename(s.R1_path);
-			let f2 = basename(s.R2_path);
-			row.innerHTML =
-				"<td><b>" +
-				escapeHtml(s.isolate_id) +
-				"</b></td>" +
-				"<td><small>" +
-				escapeHtml(f1) +
-				"</small></td>" +
-				"<td><small>" +
-				escapeHtml(f2) +
-				"</small></td><td></td>";
-			let deleteButton = document.createElement("button");
-			deleteButton.textContent = "Delete";
-			deleteButton.addEventListener("click", function () {
-				deletePair(f1, f2, deleteButton);
-			});
-			row.lastElementChild.appendChild(deleteButton);
-			sBody.appendChild(row);
+	renderTable("samples-table", "samples-empty", data.samples, function (s) {
+		let row = document.createElement("tr");
+		let f1 = basename(s.R1_path);
+		let f2 = basename(s.R2_path);
+		row.innerHTML =
+			"<td><b>" +
+			escapeHtml(s.isolate_id) +
+			"</b></td>" +
+			"<td><small>" +
+			escapeHtml(f1) +
+			"</small></td>" +
+			"<td><small>" +
+			escapeHtml(f2) +
+			"</small></td><td></td>";
+		let deleteButton = document.createElement("button");
+		deleteButton.textContent = "Delete";
+		deleteButton.addEventListener("click", function () {
+			deletePair(f1, f2, deleteButton);
 		});
-		sTable.hidden = false;
-		sEmpty.hidden = true;
-	}
+		row.lastElementChild.appendChild(deleteButton);
+		return row;
+	});
 
-	let rTable = document.getElementById("results-table");
-	let rBody = rTable.querySelector("tbody");
-	let rEmpty = document.getElementById("results-empty");
-	rBody.innerHTML = "";
-	if (!data.results.length) {
-		rTable.hidden = true;
-		rEmpty.hidden = false;
-	} else {
-		data.results.forEach(function (res) {
-			let row = document.createElement("tr");
-			let viewCell = res.has_report
-				? '<a href="/results/' +
-					jobId +
-					"/" +
-					encodeURIComponent(res.isolate_id) +
-					'/view" target="_blank">View Report</a>'
-				: "<span><small>No report yet</small></span>";
-			row.innerHTML =
-				"<td><b>" +
-				escapeHtml(res.isolate_id) +
-				"</b></td>" +
-				"<td>" +
-				viewCell +
-				' &nbsp;|&nbsp; <a href="/results/' +
-				jobId +
-				"/" +
-				encodeURIComponent(res.isolate_id) +
-				'/download">Download</a></td>';
-			rBody.appendChild(row);
-		});
-		rTable.hidden = false;
-		rEmpty.hidden = true;
-	}
+	renderTable("results-table", "results-empty", data.results, function (res) {
+		let row = document.createElement("tr");
+		let resultPath = "/results/" + jobId + "/" + encodeURIComponent(res.isolate_id);
+		let viewCell = res.has_report
+			? '<a href="' + resultPath + '/view" target="_blank">View Report</a>'
+			: "<span><small>No report yet</small></span>";
+		row.innerHTML =
+			"<td><b>" +
+			escapeHtml(res.isolate_id) +
+			"</b></td>" +
+			"<td>" +
+			viewCell +
+			' &nbsp;|&nbsp; <a href="' +
+			resultPath +
+			'/download">Download</a></td>';
+		return row;
+	});
 
 	document.getElementById("download-master-report").hidden = !data.has_master_report;
 
@@ -388,6 +396,16 @@ function renderJob(jobId, data) {
 		if (!data.run_status.done) {
 			pollRunStatus(jobId);
 		}
+	} else if (runAfterUploadRequested) {
+		// A run is queued against uploads that are still going -- one of them
+		// finishing is what re-rendered the panel. Leave the button disabled and
+		// the queued line where they are: clearing them would take the only sign
+		// that the press was registered off the screen while the app is still
+		// waiting to act on it.
+		stopRunTicker();
+		currentRunStatus = null;
+		runBtn.disabled = true;
+		abortBtn.hidden = true;
 	} else {
 		stopRunTicker();
 		currentRunStatus = null;
@@ -410,7 +428,9 @@ document.getElementById("lookup-btn").addEventListener("click", function () {
 	let jobId = document.getElementById("lookup-job-id").value.trim().toUpperCase();
 	let statusText = document.getElementById("lookup-status");
 	if (!jobId) {
-		status.textContent = "Enter a job ID first.";
+		// `status` (not statusText) used to be assigned here, which silently set
+		// window.status -- a no-op string -- so this message never appeared.
+		statusText.textContent = "Enter a job ID first.";
 		return;
 	}
 	statusText.textContent = "Looking up...";
@@ -499,7 +519,7 @@ function afterUpload(jobId) {
 // figure and lets a failed batch be retried on its own.
 let IMPORT_BATCH_BYTES = 2 * 1024 * 1024 * 1024;
 
-// Mirrors _FASTQ_SUFFIX / _R1_MARKER / _ISOLATE_RE in workflow/lib/import_samples.py.
+// Mirrors _FASTQ_SUFFIX / _R1_MARKER / _ISOLATE_RE in workflow/helpers/import_samples.py.
 // The pairing has to agree with the server's: an R1 and its R2 must ride in the
 // same batch, or the server finds no mate for it and skips the sample entirely.
 let FASTQ_SUFFIXES = [".fastq.gz", ".fq.gz", ".fastq", ".fq"];
@@ -557,26 +577,38 @@ function totalBytes(files) {
 	}, 0);
 }
 
+// The isolate IDs this job already holds, or null when that cannot be
+// established (no job yet, a failed lookup, an unreadable reply). Null means
+// "assume nothing is registered" -- re-sending a pair the job already has is
+// harmless, because the manifest updates in place, whereas skipping one it does
+// not have would silently drop a sample.
+function registeredIsolates() {
+	if (!currentJobId) return Promise.resolve(null);
+	return fetchJob(currentJobId)
+		.then(function (res) {
+			if (!res.ok || !res.d || !res.d.samples) return null;
+			let seen = {};
+			res.d.samples.forEach(function (sample) {
+				seen[sample.isolate_id] = true;
+			});
+			return seen;
+		})
+		.catch(function () {
+			return null;
+		});
+}
+
 // Resuming: a retry re-sends only the pairs the job does not already hold, so a
 // failure at the last batch of a 20 GB folder does not mean re-sending the
 // first 18 GB. Re-importing a sample it does hold is harmless (the manifest
 // updates in place), just wasted bandwidth.
 function unsentUnits(units) {
-	if (!currentJobId) return Promise.resolve(units);
-	return fetchJob(currentJobId)
-		.then(function (res) {
-			if (!res.ok || !res.d || !res.d.samples) return units;
-			let registeredIsolates = {};
-			res.d.samples.forEach(function (sample) {
-				registeredIsolates[sample.isolate_id] = true;
-			});
-			return units.filter(function (unit) {
-				return !registeredIsolates[isolateIdFor(basename(uploadName(unit[0])))];
-			});
-		})
-		.catch(function () {
-			return units;
+	return registeredIsolates().then(function (seen) {
+		if (!seen) return units;
+		return units.filter(function (unit) {
+			return !seen[isolateIdFor(basename(uploadName(unit[0])))];
 		});
+	});
 }
 
 // A dropped connection is not a verdict on the data. The bytes are still here in
@@ -604,23 +636,15 @@ function delay(milliseconds) {
 // way to learn they were already saved. Non-FASTQ files always ride along: the
 // stats workbook is what decides whether MD5s get checked at all.
 function trimAlreadyRegistered(files) {
-	if (!currentJobId) return Promise.resolve(files);
-	return fetchJob(currentJobId)
-		.then(function (res) {
-			if (!res.ok || !res.d || !res.d.samples) return files;
-			let registeredIsolates = {};
-			res.d.samples.forEach(function (sample) {
-				registeredIsolates[sample.isolate_id] = true;
-			});
-			return files.filter(function (file) {
-				let fileName = basename(uploadName(file));
-				if (!isFastq(fileName)) return true;
-				return !registeredIsolates[isolateIdFor(fileName)];
-			});
-		})
-		.catch(function () {
-			return files;
+	return registeredIsolates().then(function (seen) {
+		if (!seen) return files;
+		return files.filter(function (file) {
+			let fileName = basename(uploadName(file));
+			// Non-FASTQ files always ride along: the stats workbook is what
+			// decides whether MD5s get checked at all.
+			return !isFastq(fileName) || !seen[isolateIdFor(fileName)];
 		});
+	});
 }
 
 function hasFastq(files) {
@@ -735,7 +759,7 @@ document.getElementById("import-btn").addEventListener("click", async function (
 	let grouped = importUnits(files);
 	let units = await unsentUnits(grouped.units);
 	if (grouped.units.length && !units.length) {
-		uploadInProgress = false;
+		endUpload();
 		cancelQueuedRun("Nothing was uploaded, so no run was started.");
 		status.textContent =
 			"Every sample in this folder is already in the batch — nothing to send.";
@@ -765,7 +789,7 @@ document.getElementById("import-btn").addEventListener("click", async function (
 	// cancellation has to be said after that, or the render wipes the one message
 	// explaining why the run the user asked for is not happening.
 	async function giveUp(message) {
-		uploadInProgress = false;
+		endUpload();
 		status.textContent = message;
 		if (summary.job_id) await afterUpload(summary.job_id);
 		cancelQueuedRun(
@@ -856,105 +880,102 @@ document.getElementById("import-btn").addEventListener("click", async function (
 		bytesSent = bytesSentBeforeBatch + totalBytes(batch);
 	}
 
-	uploadInProgress = false;
+	endUpload();
 	status.textContent = importSummary(summary);
 	await afterUpload(summary.job_id);
 
-	// The whole batch is in, so a run queued during the upload can start now --
-	// and only now, because starting it earlier would have frozen the job around
-	// however many samples had landed at the time.
-	if (runAfterUploadRequested) {
-		runAfterUploadRequested = false;
-		startPipelineRun(document.getElementById("run"));
-	}
+	// This folder is in, so a run queued during the upload can start -- once
+	// nothing else is still sending. Starting it any earlier would freeze the job
+	// around however many samples had landed at the time.
+	startQueuedRunIfReady();
 });
 
-/* Cloud import is disabled; the fieldset it drives is commented out in
-			   templates/index.html and the /cloud-import routes are commented out in
-			   frontend.py. Restore all three together.
+// Cloud import ships off (CLOUD_IMPORT_ENABLED in frontend.py). When it is off
+// the fieldset is not rendered, so cloudImportButton is null and these handlers
+// simply never bind -- which is why this code can stay live and lintable instead
+// of being carried commented out, the way it used to be.
+//
+// A cloud pull can run for a long time (it is the server, not the browser, doing
+// the downloading), so /cloud-import hands back a job ID immediately and the
+// progress arrives by polling.
+function pollCloudImport(jobId, button) {
+	let status = document.getElementById("cloud-status");
+	let poll = setInterval(function () {
+		fetch("/cloud-import/status?job_id=" + encodeURIComponent(jobId))
+			.then(function (r) {
+				return r.json();
+			})
+			.then(function (data) {
+				if (data.state === "running") {
+					status.textContent = data.message || "Importing...";
+					return;
+				}
+				clearInterval(poll);
+				button.disabled = false;
+				if (data.state !== "done") {
+					status.textContent = "Error: " + (data.error || "The import failed.");
+					status.classList.add("error-text");
+					return;
+				}
+				status.classList.remove("error-text");
+				status.textContent = importSummary(data.result);
+				afterUpload(jobId);
+			})
+			.catch(function () {
+				clearInterval(poll);
+				button.disabled = false;
+				status.textContent = "Lost contact with the server during the import.";
+				status.classList.add("error-text");
+			});
+	}, 2000);
+}
 
-			// A cloud pull can run for a long time (it is the server, not the
-			// browser, doing the downloading), so /cloud-import hands back a job ID
-			// immediately and the progress arrives by polling.
-			function pollCloudImport(jobId, button) {
-				let status = document.getElementById("cloud-status");
-				let poll = setInterval(function () {
-					fetch("/cloud-import/status?job_id=" + encodeURIComponent(jobId))
-						.then(function (r) {
-							return r.json();
-						})
-						.then(function (data) {
-							if (data.state === "running") {
-								status.textContent = data.message || "Importing...";
-								return;
-							}
-							clearInterval(poll);
-							button.disabled = false;
-							if (data.state !== "done") {
-								status.textContent =
-									"Error: " + (data.error || "The import failed.");
-								status.classList.add("error-text");
-								return;
-							}
-							status.classList.remove("error-text");
-							status.textContent = importSummary(data.result);
-							afterUpload(jobId);
-						})
-						.catch(function () {
-							clearInterval(poll);
-							button.disabled = false;
-							status.textContent = "Lost contact with the server during the import.";
-							status.classList.add("error-text");
-						});
-				}, 2000);
-			}
+let cloudImportButton = document.getElementById("cloud-import-btn");
+if (cloudImportButton) {
+	cloudImportButton.addEventListener("click", async function () {
+		let status = document.getElementById("cloud-status");
+		let button = this;
+		let shareUrl = document.getElementById("cloud-url").value.trim();
+		if (!shareUrl) {
+			status.textContent = "Paste a share link first.";
+			return;
+		}
 
-			document
-				.getElementById("cloud-import-btn")
-				.addEventListener("click", async function () {
-					let status = document.getElementById("cloud-status");
-					let button = this;
-					let shareUrl = document.getElementById("cloud-url").value.trim();
-					if (!shareUrl) {
-						status.textContent = "Paste a share link first.";
-						return;
-					}
+		let formData = new FormData();
+		formData.append("share_url", shareUrl);
+		try {
+			formData = await addBatchFields(formData);
+		} catch (error) {
+			status.textContent = error.message;
+			return;
+		}
 
-					let formData = new FormData();
-					formData.append("share_url", shareUrl);
-					try {
-						formData = await addBatchFields(formData);
-					} catch (error) {
-						status.textContent = error.message;
-						return;
-					}
+		button.disabled = true;
+		status.classList.remove("error-text");
+		status.textContent = "Reading the shared folder...";
 
-					button.disabled = true;
-					status.classList.remove("error-text");
-					status.textContent = "Reading the shared folder...";
-
-					fetch("/cloud-import", { method: "POST", body: formData })
-						.then(function (r) {
-							return r.json().then(function (d) {
-								return { ok: r.ok, d: d };
-							});
-						})
-						.then(function (res) {
-							if (!res.ok) {
-								status.textContent = "Error: " + res.d.error;
-								status.classList.add("error-text");
-								button.disabled = false;
-								return;
-							}
-							pollCloudImport(res.d.job_id, button);
-						})
-						.catch(function () {
-							status.textContent = "Import failed to start.";
-							status.classList.add("error-text");
-							button.disabled = false;
-						});
+		fetch("/cloud-import", { method: "POST", body: formData })
+			.then(function (r) {
+				return r.json().then(function (d) {
+					return { ok: r.ok, d: d };
 				});
-			*/
+			})
+			.then(function (res) {
+				if (!res.ok) {
+					status.textContent = "Error: " + res.d.error;
+					status.classList.add("error-text");
+					button.disabled = false;
+					return;
+				}
+				pollCloudImport(res.d.job_id, button);
+			})
+			.catch(function () {
+				status.textContent = "Import failed to start.";
+				status.classList.add("error-text");
+				button.disabled = false;
+			});
+	});
+}
 
 document.getElementById("submit").addEventListener("click", async function (event) {
 	event.preventDefault();
@@ -974,47 +995,61 @@ document.getElementById("submit").addEventListener("click", async function (even
 		formData.append("fastq_file_2", file2);
 		formData.append("fastq_file_1_checksum", checksum1);
 		formData.append("fastq_file_2_checksum", checksum2);
+		// Two try blocks, not one: beginUpload() is what counts this upload, so a
+		// reservation that failed has nothing to un-count, while a failure after it
+		// does. Sharing a catch would decrement for both and let a run start on top
+		// of whatever else is still sending.
 		try {
 			await beginUpload();
+		} catch (error) {
+			alert(error.message);
+			return;
+		}
+		try {
 			formData = await addBatchFields(formData);
 		} catch (error) {
-			uploadInProgress = false;
+			endUpload();
+			cancelQueuedRun("The upload failed, so the queued run was not started.");
 			alert(error.message);
 			return;
 		}
 
-		fetch("/submit", { method: "POST", body: formData })
-			.then((res) => res.json())
-			.then((data) => {
-				uploadInProgress = false;
-				if (data.error) {
-					cancelQueuedRun("The upload failed, so the queued run was not started.");
-					alert(data.error);
-					return;
-				}
+		// A dropped connection is folded into the reply rather than caught around
+		// the whole chain, so exactly one path ends this upload. Sharing a catch
+		// with the code that renders the result would end it a second time
+		// whenever that code threw, and the count would then read a folder still
+		// in flight as finished -- letting the next press run against a job the
+		// browser is still filling.
+		let data;
+		try {
+			let response = await fetch("/submit", { method: "POST", body: formData });
+			data = await response.json();
+		} catch (error) {
+			data = { error: "Upload failed to contact the server." };
+		}
+		endUpload();
 
-				document.getElementById("job-banner").textContent =
-					"Job ID: " +
-					data.job_id +
-					". Save this to check your results later. Uploaded " +
-					data.isolate_id +
-					" in " +
-					formatDuration(data.upload.seconds) +
-					".";
-				afterUpload(data.job_id).then(function () {
-					if (!runAfterUploadRequested) return;
-					runAfterUploadRequested = false;
-					startPipelineRun(document.getElementById("run"));
-				});
+		if (data.error) {
+			cancelQueuedRun("The upload failed, so the queued run was not started.");
+			alert(data.error);
+			return;
+		}
 
-				fileInput1.value = "";
-				fileInput2.value = "";
-			})
-			.catch(function () {
-				uploadInProgress = false;
-				cancelQueuedRun("The upload failed, so the queued run was not started.");
-				alert("Upload failed to contact the server.");
-			});
+		document.getElementById("job-banner").textContent =
+			"Job ID: " +
+			data.job_id +
+			". Save this to check your results later. Uploaded " +
+			data.isolate_id +
+			" in " +
+			formatDuration(data.upload.seconds) +
+			".";
+		fileInput1.value = "";
+		fileInput2.value = "";
+
+		// This pair is in, but a folder import it was added on top of may not be,
+		// so the queued run starts only if nothing else is sending.
+		await afterUpload(data.job_id);
+		startQueuedRunIfReady();
 	} else {
 		alert("Please select both FASTQ files before submitting.");
 	}
@@ -1066,8 +1101,9 @@ function pollRunStatus(jobId) {
 document.getElementById("run").addEventListener("click", function () {
 	if (!currentJobId) return;
 	// Pressed while the batch is still filling: remember it and start the moment
-	// the last byte is in, rather than running against a partial batch.
-	if (uploadInProgress) {
+	// the last byte is in, rather than running against a partial batch. "The last
+	// byte" means every upload in flight, not just the one that finishes first.
+	if (uploadsInFlight > 0) {
 		runAfterUploadRequested = true;
 		this.disabled = true;
 		document.getElementById("run-status").textContent =

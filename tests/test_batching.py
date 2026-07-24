@@ -7,6 +7,7 @@ and an upload can start the pipeline itself the moment it lands.
 """
 
 import io
+import re
 import subprocess
 import sys
 import threading
@@ -17,7 +18,7 @@ from unittest import mock
 import frontend  # noqa: E402
 from tests._isolation import REAL_ROOT  # noqa: F401  (must import first)
 from tests.test_cloud_import import FakeOneDrive, fastq_bytes, md5, stats_workbook  # noqa: E402
-from workflow.helpers import jobs  # noqa: E402
+from workflow.helpers import import_samples, jobs  # noqa: E402
 from workflow.helpers.bvbrc_client import BVBRCClient  # noqa: E402
 
 _REAL_POPEN = subprocess.Popen
@@ -47,8 +48,8 @@ class Base(unittest.TestCase):
 
 	def setUp(self):
 		frontend.limiter.enabled = False
-		frontend._pipeline_processes.clear()
-		frontend._pipeline_queue.clear()
+		frontend._pipeline_manager.processes.clear()
+		frontend._pipeline_manager.queue.clear()
 		# Cloud import is disabled, so frontend has no _cloud_imports registry.
 		# frontend._cloud_imports.clear()
 
@@ -73,7 +74,7 @@ class Base(unittest.TestCase):
 		return self.client.post("/import", data=data, content_type="multipart/form-data")
 
 	def isolates(self, job_id):
-		rows, _ = frontend._read_samples(jobs.job_samples_csv(job_id))
+		rows, _ = frontend._job_store.read_samples(jobs.job_samples_csv(job_id))
 		return sorted(row["isolate_id"] for row in rows)
 
 	def run_to_terminal_status(self, job_id, popen=_fake_popen):
@@ -177,7 +178,7 @@ class TestMultipleUploadsPerJob(Base):
 			self.assertEqual(response.status_code, 409)
 			self.assertIn("running", response.get_json()["error"].lower())
 		finally:
-			for process in list(frontend._pipeline_processes.values()):
+			for process in list(frontend._pipeline_manager.processes.values()):
 				process.kill()
 			frontend.subprocess.Popen = _REAL_POPEN
 
@@ -219,7 +220,7 @@ class TestMultipleUploadsPerJob(Base):
 			self.assertEqual(response.status_code, 409)
 			self.assertIn("running", response.get_json()["error"].lower())
 		finally:
-			for process in list(frontend._pipeline_processes.values()):
+			for process in list(frontend._pipeline_manager.processes.values()):
 				process.kill()
 			frontend.subprocess.Popen = _REAL_POPEN
 
@@ -297,7 +298,7 @@ class TestAutoRun(Base):
 		frontend.subprocess.Popen = _fake_popen
 
 	def tearDown(self):
-		for process in list(frontend._pipeline_processes.values()):
+		for process in list(frontend._pipeline_manager.processes.values()):
 			try:
 				process.kill()
 			except Exception:
@@ -307,7 +308,7 @@ class TestAutoRun(Base):
 	def test_upload_without_auto_run_starts_nothing(self):
 		body = self.submit_pair("NOAUTO").get_json()
 		self.assertIsNone(body["auto_run"])
-		self.assertEqual(frontend._pipeline_processes, {})
+		self.assertEqual(frontend._pipeline_manager.processes, {})
 
 	def test_auto_run_starts_the_pipeline_when_credentials_work(self):
 		real_login = BVBRCClient.login
@@ -335,7 +336,7 @@ class TestAutoRun(Base):
 		self.assertFalse(body["auto_run"]["started"])
 		self.assertIn("BV-BRC login required", body["auto_run"]["error"])
 		self.assertEqual(self.isolates(body["job_id"]), ["AUTONOAUTH"])
-		self.assertEqual(frontend._pipeline_processes, {})
+		self.assertEqual(frontend._pipeline_manager.processes, {})
 
 	def test_auto_run_reports_bad_credentials_without_failing_the_upload(self):
 		real_login = BVBRCClient.login
@@ -384,6 +385,57 @@ class TestAutoRun(Base):
 		finally:
 			BVBRCClient.login = real_login
 			frontend.MAX_CONCURRENT_PIPELINES = saved_cap
+
+
+class TestIsolateIdAgreement(unittest.TestCase):
+	"""The browser splits a folder into batches by isolate ID and the server
+	pairs reads by it, so the two have to derive it identically: disagree, and an
+	R1 and its R2 ride in different batches, leaving the server no mate for
+	either. static/app.js therefore mirrors import_samples.isolate_id_for, and
+	nothing but this test stops the copies drifting apart."""
+
+	# Names chosen to catch the ways a looser pattern goes wrong: an embedded
+	# "_R1" that is not the read marker, a read marker at the very end, and the
+	# ordinary Illumina shape.
+	NAMES = [
+		"SW4E1_S337_R1_001.fastq.gz",
+		"SW4E1_S337_R2_001.fastq.gz",
+		"SW_R1B_S3_R1_001.fastq.gz",
+		"P106E1_S148_R1.fastq.gz",
+		"sample_R2.fq",
+		"no_marker_here.fastq.gz",
+	]
+
+	def _javascript_isolate_re(self):
+		"""The ISOLATE_RE literal out of app.js, as a Python pattern."""
+		source = (REAL_ROOT / "static" / "app.js").read_text()
+		match = re.search(r"ISOLATE_RE\s*=\s*/(.+?)/;", source)
+		self.assertIsNotNone(match, "ISOLATE_RE is no longer declared in static/app.js")
+		return re.compile(match.group(1))
+
+	def test_javascript_mirrors_the_python_definition(self):
+		javascript_pattern = self._javascript_isolate_re()
+		for file_name in self.NAMES:
+			self.assertEqual(
+				javascript_pattern.sub("", file_name),
+				import_samples.isolate_id_for(file_name),
+				f"app.js and import_samples disagree about {file_name}",
+			)
+
+	def test_read_marker_needs_a_separator(self):
+		"""The bug this replaced: /submit stripped from the first "_R1" whether or
+		not it was the read marker, so this name registered as "SW"."""
+		self.assertEqual(
+			import_samples.isolate_id_for("SW_R1B_S3_R1_001.fastq.gz"), "SW_R1B_S3"
+		)
+
+	def test_upload_routes_agree_with_the_importer(self):
+		"""/submit and /delete derive the isolate ID through the same helper, so a
+		pair registered by one route is the pair the other one removes."""
+		for file_name in self.NAMES:
+			self.assertEqual(
+				frontend.isolate_id_for(file_name), import_samples.isolate_id_for(file_name)
+			)
 
 
 if __name__ == "__main__":

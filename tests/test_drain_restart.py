@@ -39,10 +39,10 @@ class DrainBase(Base):
 
 	def _kill_pipelines(self):
 		frontend.subprocess.Popen = _REAL_POPEN
-		for pipeline_process in list(frontend._pipeline_processes.values()):
+		for pipeline_process in list(frontend._pipeline_manager.processes.values()):
 			pipeline_process.kill()
-		frontend._pipeline_processes.clear()
-		frontend._pipeline_queue.clear()
+		frontend._pipeline_manager.processes.clear()
+		frontend._pipeline_manager.queue.clear()
 
 	def runnable_job(self, name):
 		job_id = self.submit_pair(name).get_json()["job_id"]
@@ -74,8 +74,8 @@ class TestDrainQueuesInsteadOfStarting(DrainBase):
 		self.assertEqual(response.status_code, 202)
 		self.assertTrue(response.get_json()["queued"])
 		self.assertIn("database refresh", response.get_json()["message"])
-		self.assertEqual(frontend._pipeline_processes, {})
-		self.assertEqual(list(frontend._pipeline_queue), [job_id])
+		self.assertEqual(frontend._pipeline_manager.processes, {})
+		self.assertEqual(list(frontend._pipeline_manager.queue), [job_id])
 
 	def test_a_queue_does_not_drain_into_slots_while_draining(self):
 		"""A finishing run frees a slot mid-drain. That slot must stay empty."""
@@ -84,11 +84,11 @@ class TestDrainQueuesInsteadOfStarting(DrainBase):
 		frontend.subprocess.Popen = _sleeping_popen
 		self.client.post("/run", data={"job_id": job_id})
 
-		with frontend._pipeline_lock:
-			frontend._drain_pipeline_queue()
+		with frontend._pipeline_manager.lock:
+			frontend._pipeline_manager.drain()
 
-		self.assertEqual(frontend._pipeline_processes, {})
-		self.assertEqual(list(frontend._pipeline_queue), [job_id])
+		self.assertEqual(frontend._pipeline_manager.processes, {})
+		self.assertEqual(list(frontend._pipeline_manager.queue), [job_id])
 
 	def test_health_reports_drain_state_without_leaking_job_ids(self):
 		"""deploy/refresh-databases.sh polls this to know when it is safe to
@@ -129,7 +129,7 @@ class TestUploadsDuringADrain(DrainBase):
 		self.assertEqual(response.status_code, 200)
 		job_id = response.get_json()["job_id"]
 		self.assertEqual(self.isolates(job_id), ["MIDREF_PAIR"])
-		self.assertEqual(frontend._pipeline_processes, {})
+		self.assertEqual(frontend._pipeline_manager.processes, {})
 
 	def test_a_folder_imported_mid_refresh_is_still_accepted(self):
 		self.start_drain()
@@ -139,7 +139,7 @@ class TestUploadsDuringADrain(DrainBase):
 		self.assertEqual(response.status_code, 200)
 		job_id = response.get_json()["job_id"]
 		self.assertEqual(self.isolates(job_id), ["MIDREF_F_S1", "MIDREF_F_S2"])
-		self.assertEqual(frontend._pipeline_processes, {})
+		self.assertEqual(frontend._pipeline_manager.processes, {})
 
 	def test_an_upload_can_still_be_added_to_an_existing_job_mid_refresh(self):
 		"""The refresh lands between two halves of one batch."""
@@ -166,8 +166,8 @@ class TestUploadsDuringADrain(DrainBase):
 		self.assertTrue(body["auto_run"]["started"])
 		self.assertTrue(body["auto_run"]["queued"])
 		self.assertEqual(self.isolates(body["job_id"]), ["MIDREF_AUTO"])
-		self.assertEqual(frontend._pipeline_processes, {})
-		self.assertEqual(list(frontend._pipeline_queue), [body["job_id"]])
+		self.assertEqual(frontend._pipeline_manager.processes, {})
+		self.assertEqual(list(frontend._pipeline_manager.queue), [body["job_id"]])
 
 	def test_an_upload_queued_mid_refresh_runs_once_the_refresh_is_over(self):
 		"""Nothing uploaded during the refresh is lost: the queue picks it up when
@@ -181,14 +181,14 @@ class TestUploadsDuringADrain(DrainBase):
 			).get_json()["job_id"]
 		finally:
 			BVBRCClient.login = real_login
-		self.assertEqual(list(frontend._pipeline_queue), [job_id])
+		self.assertEqual(list(frontend._pipeline_manager.queue), [job_id])
 
 		jobs.drain_flag_path().unlink(missing_ok=True)
-		with frontend._pipeline_lock:
-			frontend._drain_pipeline_queue()
+		with frontend._pipeline_manager.lock:
+			frontend._pipeline_manager.drain()
 
-		self.assertIn(job_id, frontend._pipeline_processes)
-		self.assertEqual(list(frontend._pipeline_queue), [])
+		self.assertIn(job_id, frontend._pipeline_manager.processes)
+		self.assertEqual(list(frontend._pipeline_manager.queue), [])
 
 
 # Persistence
@@ -224,7 +224,7 @@ class TestStartupRecovery(DrainBase):
 		jobs.job_run_started_path(job_id).write_text("1783915052.0")
 		self.assertFalse(jobs.job_status_path(job_id).is_file())
 
-		frontend._reconcile_interrupted_runs()
+		frontend._pipeline_manager.reconcile(frontend.RESULTS_ROOT)
 
 		status = self.client.get(f"/status?job_id={job_id}").get_json()
 		self.assertTrue(status["done"])
@@ -235,9 +235,9 @@ class TestStartupRecovery(DrainBase):
 		job_id = self.runnable_job("FINISHED")
 		jobs.job_results_dir(job_id).mkdir(parents=True, exist_ok=True)
 		jobs.job_run_started_path(job_id).write_text("1783915052.0")
-		frontend._write_job_status(job_id, True)
+		frontend._pipeline_manager._write_status(job_id, True)
 
-		frontend._reconcile_interrupted_runs()
+		frontend._pipeline_manager.reconcile(frontend.RESULTS_ROOT)
 
 		self.assertTrue(self.client.get(f"/status?job_id={job_id}").get_json()["success"])
 
@@ -248,14 +248,14 @@ class TestStartupRecovery(DrainBase):
 		self.start_drain()
 		self.client.post("/run", data={"job_id": job_id})
 		# Simulate the restart: the new process has no memory of either structure.
-		frontend._pipeline_queue.clear()
-		frontend._pipeline_processes.clear()
+		frontend._pipeline_manager.queue.clear()
+		frontend._pipeline_manager.processes.clear()
 		frontend.subprocess.Popen = _sleeping_popen
 
-		frontend._reconcile_interrupted_runs()
+		frontend._pipeline_manager.reconcile(frontend.RESULTS_ROOT)
 
-		self.assertIn(job_id, frontend._pipeline_processes)
-		self.assertEqual(list(frontend._pipeline_queue), [])
+		self.assertIn(job_id, frontend._pipeline_manager.processes)
+		self.assertEqual(list(frontend._pipeline_manager.queue), [])
 		self.assertEqual(self.persisted_queue(), [])
 
 	def test_boot_clears_the_drain_flag(self):
@@ -264,33 +264,33 @@ class TestStartupRecovery(DrainBase):
 		would queue runs forever."""
 		self.start_drain()
 
-		frontend._reconcile_interrupted_runs()
+		frontend._pipeline_manager.reconcile(frontend.RESULTS_ROOT)
 
 		self.assertFalse(jobs.drain_flag_path().is_file())
-		self.assertFalse(frontend._is_draining())
+		self.assertFalse(frontend._pipeline_manager.is_draining())
 
 	def test_a_queued_job_is_not_mistaken_for_an_interrupted_run(self):
 		"""A queued job never started, so it must not be marked failed."""
 		job_id = self.runnable_job("QUEUEDNOTRUN")
 		self.start_drain()
 		self.client.post("/run", data={"job_id": job_id})
-		frontend._pipeline_queue.clear()
+		frontend._pipeline_manager.queue.clear()
 		frontend.subprocess.Popen = _sleeping_popen
 
-		frontend._reconcile_interrupted_runs()
+		frontend._pipeline_manager.reconcile(frontend.RESULTS_ROOT)
 
-		self.assertIsNone(frontend._read_job_status(job_id))
+		self.assertIsNone(frontend._job_store.read_status(job_id))
 
 	def test_a_queued_job_whose_data_vanished_does_not_wedge_the_queue(self):
 		job_id = self.runnable_job("GONE")
 		self.start_drain()
 		self.client.post("/run", data={"job_id": job_id})
 		jobs.job_samples_csv(job_id).unlink()
-		frontend._pipeline_queue.clear()
+		frontend._pipeline_manager.queue.clear()
 
-		frontend._reconcile_interrupted_runs()
+		frontend._pipeline_manager.reconcile(frontend.RESULTS_ROOT)
 
-		self.assertEqual(list(frontend._pipeline_queue), [])
+		self.assertEqual(list(frontend._pipeline_manager.queue), [])
 		self.assertEqual(self.persisted_queue(), [])
 
 	def test_a_corrupt_queue_file_does_not_stop_the_app_booting(self):
@@ -302,7 +302,7 @@ class TestStartupRecovery(DrainBase):
 
 		frontend.run_startup_recovery()
 
-		self.assertEqual(list(frontend._pipeline_queue), [])
+		self.assertEqual(list(frontend._pipeline_manager.queue), [])
 
 
 class UploadsAreVisibleToTheDrain(Base):

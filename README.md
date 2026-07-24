@@ -122,12 +122,11 @@ run shows its total duration. `/job/<id>` returns this as `uploads[]` and
 
 ### Cloud Imports (OneDrive / Google Drive)
 
-> **Disabled.** The `/cloud-import` routes in `frontend.py`, the fieldset in
-> `templates/index.html` and the handlers in `static/app.js` are commented out, so
-> the share-link box does not appear and the routes return 404. Uploading a pair
-> and importing a folder are unaffected. `workflow/lib/cloud_import.py` and its
-> unit tests are untouched; re-enabling means uncommenting those three call sites.
-> The rest of this section describes the feature as it works when enabled.
+> **Off by default.** Set `CLOUD_IMPORT_ENABLED=1` to turn it on. While it is
+> off the share-link fieldset is not rendered and both `/cloud-import` routes
+> answer 404; uploading a pair and importing a folder are unaffected. The code
+> stays live either way (it used to be carried commented out in three files,
+> which is how it went stale), and its tests run against the enabled flag.
 
 A sequencing company usually leaves the run in a cloud folder and mails a share
 link. Pasting that link into "Import From OneDrive or Google Drive" makes the
@@ -629,7 +628,7 @@ Two things to know before raising `BVBRC_MAX_IN_FLIGHT`:
 
 The page turns the above into the two times a waiting user actually wants: how long
 a queued run has until it starts, and how much longer a running one has to go. Both
-come from one estimate in `workflow/lib/run_estimates.py`, which is the two-term
+come from one estimate in `workflow/helpers/run_estimates.py`, which is the two-term
 model above (`RUN_REMOTE_SECONDS`, `RUN_LOCAL_CORE_SECONDS_PER_SAMPLE`) multiplied by
 a correction learned from this instance: every successful run divides what it actually
 took by what the model predicted, and the estimate uses the median of the last 25
@@ -662,12 +661,14 @@ frontend.py                    Flask web app and job lifecycle
 workflow/Snakefile             Snakemake entry point
 workflow/rules/*.smk           Pipeline rules
 workflow/scripts/*.py          Rule implementation scripts
-workflow/lib/jobs.py           Job ID paths and validation
-workflow/lib/bvbrc_client.py   BV-BRC API client
-workflow/lib/import_samples.py Folder import and FASTQ pairing
-workflow/lib/cloud_import.py   OneDrive/Google Drive share-link pulls
-workflow/lib/preprocess.py     FASTQ/manifest/checksum helpers
-workflow/lib/utils.py          Logging, JSON, retry, and file helpers
+workflow/scripts/report_io.py      Shared report reading/writing helpers
+workflow/helpers/jobs.py           Job ID paths and validation
+workflow/helpers/job_store.py      Atomic per-job manifest/status/upload state
+workflow/helpers/bvbrc_client.py   BV-BRC API client
+workflow/helpers/import_samples.py Folder import and FASTQ pairing
+workflow/helpers/cloud_import.py   OneDrive/Google Drive share-link pulls
+workflow/helpers/preprocess.py     FASTQ integrity and checksum verification
+workflow/helpers/utils.py          Logging, retry, checksums, streaming zip
 templates/                     Web UI templates
 static/                        Web UI styling
 ```

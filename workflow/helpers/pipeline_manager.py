@@ -266,10 +266,6 @@ class PipelineManager:
 				assemblies += 1
 		return samples, assemblies
 
-	def pending_sample_count(self, job_id):
-		"""Samples a run of this job would have to do. See ``pending_work``."""
-		return self.pending_work(job_id)[0]
-
 	def estimated_seconds(self, job_id):
 		"""How long this job's run should take, by the history of past runs. A job
 		already running is measured by the work it started with; one still waiting,
@@ -342,6 +338,31 @@ class PipelineManager:
 			queue_seconds=queue_seconds,
 		)
 
+	def _check_missing_files(self, job_id, samples):
+		"""Return list of missing file paths, checking both local disk and S3.
+
+		The manifest stores each read relative to the project root, so that is what
+		it has to be joined to: joining it to the job's own data directory instead
+		builds data/raw_fastq/<job>/data/raw_fastq/<job>/<read>, which never exists,
+		and every run is refused as an upload still in progress.
+		"""
+		missing = []
+		for sample in samples:
+			for path_column in ("R1_path", "R2_path"):
+				file_path = sample.get(path_column)
+				if not file_path:
+					continue
+				local_path = self.project_root() / file_path
+				if local_path.is_file():
+					continue
+				if self.storage.is_enabled():
+					from workflow.helpers.s3_storage import raw_key_for, object_exists
+					raw_key = raw_key_for(job_id, local_path.name)
+					if object_exists(raw_key):
+						continue
+				missing.append(file_path)
+		return missing
+
 	def is_busy(self, job_id):
 		with self.lock:
 			process = self.processes.get(job_id)
@@ -350,8 +371,14 @@ class PipelineManager:
 	def admit(self, job_id, authenticated):
 		if not jobs.job_samples_csv(job_id).exists():
 			return {"error": "Unknown job ID"}, 404
-		if not self.job_store.read_samples(jobs.job_samples_csv(job_id))[0]:
+		samples, _ = self.job_store.read_samples(jobs.job_samples_csv(job_id))
+		if not samples:
 			return {"error": "No FASTQ data has been uploaded for this job yet"}, 400
+		missing_files = self._check_missing_files(job_id, samples)
+		if missing_files:
+			return {
+				"error": "Upload still in progress. Some files are not yet available. Try again in a moment."
+			}, 409
 		with self.lock:
 			process = self.processes.get(job_id)
 			if (process is not None and process.poll() is None) or job_id in self.queue:

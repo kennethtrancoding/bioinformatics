@@ -1,13 +1,11 @@
 import hmac
 import os
-import re
 import shutil
 import signal
 import subprocess
 import tempfile
 import threading
 import time
-from contextlib import contextmanager
 from datetime import datetime, timezone
 from functools import wraps
 from pathlib import Path
@@ -29,15 +27,11 @@ from flask_limiter.util import get_remote_address
 from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 
-from workflow.helpers import api_registry, s3_storage
+from workflow.helpers import api_registry, cloud_import, s3_storage
 from workflow.helpers.bvbrc_client import BVBRCClient
-from workflow.helpers.import_service import ImportService
-
-# Cloud import is disabled; these two are only needed by the commented-out
-# /cloud-import routes below.
-# from workflow.helpers import cloud_import
-# from workflow.helpers.import_service import CloudImportManager
-from workflow.helpers.job_store import SAMPLE_FIELDS, JobStore
+from workflow.helpers.import_samples import isolate_id_for
+from workflow.helpers.import_service import CloudImportManager, ImportService
+from workflow.helpers.job_store import JobStore
 from workflow.helpers.jobs import (
 	generate_job_id,
 	is_valid_isolate_id,
@@ -192,20 +186,6 @@ _pipeline_manager = PipelineManager(
 	upload_batch=BVBRC_UPLOAD_BATCH,
 	popen_module=subprocess,
 )
-# Compatibility aliases for operational tooling and the existing test suite.
-_pipeline_lock = _pipeline_manager.lock
-_pipeline_processes = _pipeline_manager.processes
-_pipeline_queue = _pipeline_manager.queue
-_pipeline_aborted_jobs = _pipeline_manager.aborted_jobs
-_expiring_jobs = _pipeline_manager.expiring_jobs
-
-
-def _persist_pipeline_queue():
-	_pipeline_manager.persist_queue()
-
-
-def _is_draining():
-	return _pipeline_manager.is_draining()
 
 
 # Uploads run inside the request that carries them: /submit and /import stage the
@@ -224,31 +204,19 @@ _uploads_lock = threading.Lock()
 _uploads_in_flight = 0
 
 
-@contextmanager
-def _track_upload():
-	"""Count one upload as in flight for as long as its request is running."""
-	global _uploads_in_flight
-	with _uploads_lock:
-		_uploads_in_flight += 1
-	try:
-		yield
-	finally:
-		with _uploads_lock:
-			_uploads_in_flight -= 1
-
-
-def _uploads_in_flight_count():
-	with _uploads_lock:
-		return _uploads_in_flight
-
-
 def _counts_as_upload(view):
 	"""Mark a route as an upload, so a drain waits for it before restarting."""
 
 	@wraps(view)
 	def wrapper(*args, **kwargs):
-		with _track_upload():
+		global _uploads_in_flight
+		with _uploads_lock:
+			_uploads_in_flight += 1
+		try:
 			return view(*args, **kwargs)
+		finally:
+			with _uploads_lock:
+				_uploads_in_flight -= 1
 
 	return wrapper
 
@@ -271,9 +239,22 @@ def _job_lock(job_id):
 _import_service = ImportService(s3_storage, _job_store, lambda: PROJECT_ROOT, _job_lock)
 
 
-def _job_or_400(job_id):
+def _require_job(job_id, *, normalize=False, must_exist=True):
+	"""Validate a job ID: 400 for a malformed one, 404 for one we never issued.
+
+	``normalize`` folds in the strip/upper the form-driven routes apply, so an ID
+	typed with stray whitespace or in lower case still resolves. ``must_exist``
+	is False on the routes that only guard the ID's shape because what they do
+	next -- admit a run, abort one, serve a result -- reports a missing job
+	itself, in its own vocabulary. Returns the normalized ID.
+	"""
+	if normalize:
+		job_id = (job_id or "").strip().upper()
 	if not is_valid_job_id(job_id):
 		abort(400, description="Malformed job ID.")
+	if must_exist and not job_samples_csv(job_id).is_file():
+		abort(404)
+	return job_id
 
 
 def _resolve_result_dir(job_id, isolate_id):
@@ -291,83 +272,13 @@ def _resolve_result_dir(job_id, isolate_id):
 	return resolved_path
 
 
-_CSV_FIELDS = SAMPLE_FIELDS
-
-
-def _read_samples(samples_csv):
-	return _job_store.read_samples(samples_csv)
-
-
-def _write_samples(samples_csv, sample_rows, fieldnames=_CSV_FIELDS):
-	_job_store.write_samples(samples_csv, sample_rows, fieldnames)
-
-
-def _upsert_sample(samples_csv, isolate_id, r1_path, r2_path):
-	_job_store.upsert_sample(Path(samples_csv).parent.name, isolate_id, r1_path, r2_path)
-
-
-def _remove_sample(samples_csv, isolate_id):
-	_job_store.remove_sample(Path(samples_csv).parent.name, isolate_id)
-
-
-def _read_uploads(job_id):
-	return _job_store.read_uploads(job_id)
-
-
-def _record_upload(job_id, method, started_at, added, updated):
-	return _job_store.record_upload(job_id, method, started_at, added, updated)
-
-
-def _extract_error_summary(log_path, max_chars=800):
-	return _pipeline_manager._extract_error_summary(log_path, max_chars)
-
-
-def _write_job_status(job_id, success, aborted=False, interrupted=False):
-	_pipeline_manager._write_status(job_id, success, aborted=aborted, interrupted=interrupted)
-
-
-def _reset_run_markers(job_id):
-	_job_store.reset_run_markers(job_id)
-
-
-def _start_pipeline(job_id):
-	_pipeline_manager.cores = PIPELINE_CORES
-	_pipeline_manager.bvbrc_in_flight = BVBRC_MAX_IN_FLIGHT
-	_pipeline_manager.upload_batch = BVBRC_UPLOAD_BATCH
-	_pipeline_manager.start(job_id)
-
-
-def _drain_pipeline_queue():
-	_pipeline_manager.drain()
-
-
-def _claim_raw_for_job(job_id):
-	_pipeline_manager.claim_raw(job_id)
-
-
-def _return_raw_to_the_clock(job_id):
-	_pipeline_manager.return_raw(job_id)
-
-
-def _watch_pipeline(job_id, pipeline_process):
-	_pipeline_manager.watch(job_id, pipeline_process)
-
-
-def _read_job_status(job_id):
-	return _job_store.read_status(job_id)
-
-
-def _mark_first_viewed(job_id):
-	_job_store.mark_first_viewed(job_id)
-
-
 def _job_snapshot(job_id):
 	"""Everything the lookup box needs to show for one job: its samples, each
 	isolate's result availability, and pipeline status (live if this job is
 	currently running, persisted from disk otherwise -- so a crash stays
 	visible on every later lookup, not just to a tab that was open when it
 	happened)."""
-	samples, sample_fieldnames = _read_samples(job_samples_csv(job_id))
+	samples, sample_fieldnames = _job_store.read_samples(job_samples_csv(job_id))
 	results_dir = job_results_dir(job_id)
 	results_by_isolate = {}
 	if results_dir.is_dir():
@@ -387,9 +298,9 @@ def _job_snapshot(job_id):
 	started_at = _job_store.read_run_started(job_id)
 
 	run_status = None
-	with _pipeline_lock:
-		pipeline_process = _pipeline_processes.get(job_id)
-		queue_position = _pipeline_queue.index(job_id) + 1 if job_id in _pipeline_queue else None
+	with _pipeline_manager.lock:
+		pipeline_process = _pipeline_manager.processes.get(job_id)
+		queue_position = _pipeline_manager.queue.index(job_id) + 1 if job_id in _pipeline_manager.queue else None
 		# Both estimates are read under the lock because both are computed from the
 		# live queue and process table, which any finishing run may rewrite.
 		queue_wait_seconds = _pipeline_manager.queue_wait_seconds(job_id)
@@ -419,7 +330,7 @@ def _job_snapshot(job_id):
 			"finished_at": None,
 		}
 	else:
-		persisted_status = _read_job_status(job_id)
+		persisted_status = _job_store.read_status(job_id)
 		if persisted_status is not None:
 			# started_at and finished_at together are what let the page report how
 			# long the run actually took, rather than only that it ended.
@@ -430,12 +341,12 @@ def _job_snapshot(job_id):
 				"started_at": started_at,
 				"finished_at": persisted_status.get("finished_at"),
 			}
-			_mark_first_viewed(job_id)
+			_job_store.mark_first_viewed(job_id)
 
 	return {
 		"job_id": job_id,
 		"samples": samples,
-		"uploads": _read_uploads(job_id),
+		"uploads": _job_store.read_uploads(job_id),
 		"results": [
 			{"isolate_id": isolate_id, **isolate_result_info}
 			for isolate_id, isolate_result_info in results_by_isolate.items()
@@ -459,7 +370,7 @@ def _migrate_legacy_samples():
 		_MIGRATION_MARKER.touch(exist_ok=True)
 		return
 
-	sample_rows, legacy_sample_fieldnames = _read_samples(_LEGACY_SAMPLES_CSV)
+	sample_rows, legacy_sample_fieldnames = _job_store.read_samples(_LEGACY_SAMPLES_CSV)
 	if not sample_rows:
 		_MIGRATION_MARKER.touch(exist_ok=True)
 		return
@@ -485,7 +396,7 @@ def _migrate_legacy_samples():
 				shutil.move(str(legacy_results_dir), str(new_results_dir / isolate_id))
 		migrated_rows.append(sample_row)
 
-	_write_samples(job_samples_csv(job_id), migrated_rows)
+	_job_store.write_samples(job_samples_csv(job_id), migrated_rows)
 	_LEGACY_SAMPLES_CSV.unlink()
 	_MIGRATION_MARKER.parent.mkdir(parents=True, exist_ok=True)
 	_MIGRATION_MARKER.write_text(job_id + "\n")
@@ -496,7 +407,8 @@ _migrate_legacy_samples()
 
 
 # Data retention: raw FASTQ is deleted by a dedicated Snakemake rule as soon as
-# a sample no longer needs it (see workflow/rules/cleanup.smk). A finished
+# a sample no longer needs it -- it is a temp() output of fetch_raw_read, see
+# workflow/rules/raw.smk. A finished
 # job's results are deleted when *either*:
 #   - 3 hours after the user first views them (checked via job_first_viewed_path)
 #   - 7 days after the pipeline completed (checked via job_status_path)
@@ -518,38 +430,6 @@ _retention_service.max_ttl_seconds = _MAX_TTL_SECONDS
 _retention_service.sweep_interval = _RETENTION_SWEEP_INTERVAL
 
 
-def _job_is_live(job_id):
-	return job_id in _pipeline_manager.processes or job_id in _pipeline_manager.queue
-
-
-def _claim_for_expiry(job_id):
-	return _retention_service._claim_finished(job_id)
-
-
-def _claim_for_expiry_of_unrun_job(job_id):
-	return _retention_service._claim_unrun(job_id)
-
-
-def _finish_expiry(job_id):
-	_retention_service._finish(job_id)
-
-
-def _expire_job_results(job_id, job_results_directory, current_time):
-	_retention_service._expire_results(job_id, job_results_directory, current_time)
-
-
-def _sweep_expired_results():
-	_retention_service.sweep()
-
-
-def _retention_loop():
-	_retention_service._loop()
-
-
-def _reconcile_interrupted_runs():
-	_pipeline_manager.reconcile(RESULTS_ROOT)
-
-
 def run_startup_recovery():
 	"""Entry point for the two ways this app is served: gunicorn's post_worker_init
 	hook in production (see gunicorn.conf.py) and the __main__ block locally.
@@ -560,7 +440,7 @@ def run_startup_recovery():
 	time would scan the developer's actual results/ and mark whatever run they had
 	in progress as failed."""
 	try:
-		_reconcile_interrupted_runs()
+		_pipeline_manager.reconcile(RESULTS_ROOT)
 		_retention_service.start()
 	except Exception as exception:
 		# Never let recovery keep the app from booting: a frontend that will not
@@ -573,6 +453,7 @@ def analysis():
 	databases_updated_at = _reference_databases_updated_at()
 	return render_template(
 		"index.html",
+		cloud_import_enabled=CLOUD_IMPORT_ENABLED,
 		db_last_updated=_human_readable_time_ago(databases_updated_at) if databases_updated_at else None,
 		db_last_updated_iso=databases_updated_at.isoformat(timespec="seconds")
 		if databases_updated_at
@@ -585,18 +466,15 @@ def analysis():
 def create_job():
 	"""Reserve one empty job before concurrent browser uploads begin."""
 	job_id = generate_job_id()
-	_write_samples(job_samples_csv(job_id), [])
+	_job_store.write_samples(job_samples_csv(job_id), [])
 	return jsonify({"job_id": job_id}), 201
 
 
 @app.route("/settings", methods=["GET", "POST"])
 def settings():
-	job_id = request.values.get("job_id", "").strip().upper()
-	if not job_id:
+	if not (request.values.get("job_id") or "").strip():
 		return render_template("settings.html", job_id=None, endpoints=[], settings_saved=False)
-	_job_or_400(job_id)
-	if not job_samples_csv(job_id).is_file():
-		abort(404)
+	job_id = _require_job(request.values.get("job_id"), normalize=True)
 	if request.method == "POST":
 		api_registry.save_job_overrides(job_id, request.form)
 		username = request.form.get("username", "").strip()
@@ -631,10 +509,7 @@ def settings():
 
 @app.route("/settings/reset", methods=["POST"])
 def settings_reset():
-	job_id = request.form.get("job_id", "").strip().upper()
-	_job_or_400(job_id)
-	if not job_samples_csv(job_id).is_file():
-		abort(404)
+	job_id = _require_job(request.form.get("job_id"), normalize=True)
 	api_registry.save_job_overrides(job_id, {})
 	return redirect(url_for("settings", job_id=job_id))
 
@@ -694,16 +569,14 @@ def _human_readable_time_ago(dt):
 def api_health():
 	job_id = request.args.get("job_id")
 	if job_id:
-		_job_or_400(job_id)
-		if not job_samples_csv(job_id).is_file():
-			abort(404)
-	with _pipeline_lock:
+		_require_job(job_id)
+	with _pipeline_manager.lock:
 		running_count = sum(
 			1
-			for pipeline_process in _pipeline_processes.values()
+			for pipeline_process in _pipeline_manager.processes.values()
 			if pipeline_process.poll() is None
 		)
-		queued_count = len(_pipeline_queue)
+		queued_count = len(_pipeline_manager.queue)
 	return jsonify(
 		{
 			"services": api_registry.check_all(job_id=job_id),
@@ -711,39 +584,15 @@ def api_health():
 			# Counts only, never job IDs: this route is deliberately exempt from
 			# auth (see the before_request hook) and a job ID is a credential.
 			"pipelines": {
-				"draining": _is_draining(),
+				"draining": _pipeline_manager.is_draining(),
 				"running": running_count,
 				"queued": queued_count,
 			},
 			# Uploads in flight, for the same reason: restarting under one loses
 			# it. Same contract as pipelines above -- a count, never a job ID.
-			"uploads": {"in_flight": _uploads_in_flight_count()},
+			"uploads": {"in_flight": _uploads_in_flight},
 		}
 	)
-
-
-def _save_upload(job_id, upload_file, destination_path):
-	return _import_service.save_upload(job_id, upload_file, destination_path)
-
-
-def _release_local_raw(job_id, *paths):
-	_import_service.release_local_raw(job_id, *paths)
-
-
-def _discard_raw_upload(job_id, *paths):
-	_import_service.discard_raw_upload(job_id, *paths)
-
-
-def _backup_raw_files_to_s3(job_id, raw_paths):
-	return _import_service.backup_raw_files(job_id, raw_paths)
-
-
-def _raw_paths_for_isolates(job_id, isolate_ids):
-	return _import_service.raw_paths_for_isolates(job_id, isolate_ids, job_samples_csv(job_id))
-
-
-def _job_is_busy(job_id):
-	return _pipeline_manager.is_busy(job_id)
 
 
 def _frozen_samples_response(job_id):
@@ -757,7 +606,7 @@ def _frozen_samples_response(job_id):
 	failed -- the samples are the inputs that produced its results, and editing them
 	would leave results that no longer correspond to their inputs. A different set of
 	files is a different job: start a new one."""
-	if _job_is_busy(job_id):
+	if _pipeline_manager.is_busy(job_id):
 		return (
 			jsonify(
 				{
@@ -767,7 +616,7 @@ def _frozen_samples_response(job_id):
 			),
 			409,
 		)
-	if _read_job_status(job_id) is not None:
+	if _job_store.read_status(job_id) is not None:
 		return (
 			jsonify(
 				{
@@ -800,29 +649,25 @@ def _resolve_upload_job(requested_job_id):
 	return requested_job_id, None
 
 
-def _authenticate_job(job_id, username, password):
-	"""Log this job in to BV-BRC when credentials came with the request. Returns
-	an error message, or None when there is nothing to do or it worked."""
-	if not username or not password:
-		return None
-	if not BVBRCClient(job_id=job_id).login(username, password):
-		return "BV-BRC authentication failed"
-	return None
+def _login_and_admit(job_id, form):
+	"""Log the job in to BV-BRC if credentials came with the request, then start
+	or queue its run. Returns ``(payload, http_status)``.
 
+	The login and the admission are one step because they were two, and the two
+	layers each did the login: /run authenticated and then called a helper that
+	authenticated again, so every run request spent two 10-second BV-BRC logins
+	to accomplish one. Credentials are optional -- a job whose token is already
+	on disk sends none -- and admit() is what refuses an unauthenticated run.
+	"""
+	if CLOUD_IMPORT_ENABLED and _cloud_imports.get(job_id, {}).get("state") == "running":
+		return {
+			"error": "This job has a cloud import in progress. Wait for it to finish or check the import status."
+		}, 409
 
-def _admit_pipeline_run(job_id):
-	"""Start or queue a run. Shared by /run and by the auto-run option on every
-	upload path.
-
-	Returns (payload, http_status)."""
-	authentication_error = _authenticate_job(
-		job_id,
-		request.form.get("username", "").strip(),
-		request.form.get("password", "").strip(),
-	)
-
-	if authentication_error:
-		return jsonify({"error": authentication_error}), 401
+	username = (form.get("username") or "").strip()
+	password = (form.get("password") or "").strip()
+	if username and password and not BVBRCClient(job_id=job_id).login(username, password):
+		return {"error": "BV-BRC authentication failed"}, 401
 
 	_pipeline_manager.max_concurrent = MAX_CONCURRENT_PIPELINES
 	return _pipeline_manager.admit(job_id, lambda: BVBRCClient(job_id=job_id).is_authenticated())
@@ -839,13 +684,7 @@ def _auto_run_if_requested(job_id, form):
 	if (form.get("auto_run") or "").strip().lower() not in ("1", "true", "on", "yes"):
 		return None
 
-	authentication_error = _authenticate_job(
-		job_id, (form.get("username") or "").strip(), (form.get("password") or "").strip()
-	)
-	if authentication_error:
-		return {"started": False, "error": authentication_error}
-
-	run_payload, run_status_code = _admit_pipeline_run(job_id)
+	run_payload, run_status_code = _login_and_admit(job_id, form)
 	if run_status_code >= 400:
 		return {"started": False, "error": run_payload["error"]}
 	return {
@@ -879,8 +718,8 @@ def submit():
 	# arrives rather than reading the finished file back off disk to upload it.
 	r1_path = data_dir / secure_filename(first_fastq_upload.filename)
 	r2_path = data_dir / secure_filename(second_fastq_upload.filename)
-	r1_in_s3 = _save_upload(job_id, first_fastq_upload, r1_path)
-	r2_in_s3 = _save_upload(job_id, second_fastq_upload, r2_path)
+	r1_in_s3 = _import_service.save_upload(job_id, first_fastq_upload, r1_path)
+	r2_in_s3 = _import_service.save_upload(job_id, second_fastq_upload, r2_path)
 
 	# Verify MD5 checksums if provided. Deliberately re-reads the files from disk
 	# rather than digesting the bytes in flight: what has to be correct is what the
@@ -888,18 +727,18 @@ def submit():
 	if first_read_checksum:
 		checksum_valid, checksum_message = verify_file_md5(r1_path, first_read_checksum)
 		if not checksum_valid:
-			_discard_raw_upload(job_id, r1_path, r2_path)
+			_import_service.discard_raw_upload(job_id, r1_path, r2_path)
 			return jsonify({"error": f"R1 checksum mismatch: {checksum_message}"}), 400
 
 	if second_read_checksum:
 		checksum_valid, checksum_message = verify_file_md5(r2_path, second_read_checksum)
 		if not checksum_valid:
-			_discard_raw_upload(job_id, r1_path, r2_path)
+			_import_service.discard_raw_upload(job_id, r1_path, r2_path)
 			return jsonify({"error": f"R2 checksum mismatch: {checksum_message}"}), 400
 
-	isolate_id = re.sub(r"_R[12].*", "", Path(first_fastq_upload.filename).name)
+	isolate_id = isolate_id_for(Path(first_fastq_upload.filename).name)
 	if not is_valid_isolate_id(isolate_id):
-		_discard_raw_upload(job_id, r1_path, r2_path)
+		_import_service.discard_raw_upload(job_id, r1_path, r2_path)
 		return jsonify({"error": "Could not derive a valid isolate ID from the filename"}), 400
 
 	# Read both reads through before accepting the pair. This costs a full pass over
@@ -912,21 +751,21 @@ def submit():
 		{"R1_path": str(r1_path), "R2_path": str(r2_path)}
 	)
 	if not pair_valid:
-		_discard_raw_upload(job_id, r1_path, r2_path)
+		_import_service.discard_raw_upload(job_id, r1_path, r2_path)
 		return jsonify({"error": "; ".join(pair_errors), "errors": pair_errors}), 400
 
 	with _job_lock(job_id):
 		existing_isolates = {
-			sample_row.get("isolate_id") for sample_row in _read_samples(job_samples_csv(job_id))[0]
+			sample_row.get("isolate_id") for sample_row in _job_store.read_samples(job_samples_csv(job_id))[0]
 		}
-		_upsert_sample(
-			job_samples_csv(job_id),
+		_job_store.upsert_sample(
+			job_id,
 			isolate_id,
 			str(r1_path.relative_to(PROJECT_ROOT)),
 			str(r2_path.relative_to(PROJECT_ROOT)),
 		)
 		was_update = isolate_id in existing_isolates
-		upload_entry = _record_upload(
+		upload_entry = _job_store.record_upload(
 			job_id,
 			"pair",
 			upload_started_at,
@@ -939,7 +778,7 @@ def submit():
 	# fetches them back from S3 when it actually needs them. Released per file, and
 	# only for files S3 confirmed: a read that failed to upload simply stays on disk,
 	# so it is never missing from both places at once.
-	_release_local_raw(
+	_import_service.release_local_raw(
 		job_id,
 		*[path for path, in_s3 in ((r1_path, r1_in_s3), (r2_path, r2_in_s3)) if in_s3],
 	)
@@ -962,7 +801,7 @@ def submit():
 def delete_file():
 	request_data = request.get_json(silent=True) or {}
 	job_id = request_data.get("job_id")
-	_job_or_400(job_id)
+	_require_job(job_id, must_exist=False)
 	frozen = _frozen_samples_response(job_id)
 	if frozen is not None:
 		return frozen
@@ -974,9 +813,9 @@ def delete_file():
 		resolved_path = data_dir / file_name
 		if resolved_path.is_file() and resolved_path.resolve().is_relative_to(DATA_ROOT.resolve()):
 			resolved_path.unlink()
-	for isolate_id in {re.sub(r"_R[12].*", "", file_name) for file_name in uploaded_file_names}:
+	for isolate_id in {isolate_id_for(file_name) for file_name in uploaded_file_names}:
 		if is_valid_isolate_id(isolate_id):
-			_remove_sample(job_samples_csv(job_id), isolate_id)
+			_job_store.remove_sample(job_id, isolate_id)
 	return jsonify({"message": "Deleted"}), 200
 
 
@@ -1066,108 +905,93 @@ def import_folder():
 # the stats workbook, same manifest, same job ID. From /run's point of view a
 # cloud-imported job is indistinguishable from an uploaded one.
 #
-# The feature is disabled: the two routes below, the manager that backs them, the
-# fieldset in templates/index.html, and the handlers in static/app.js are all
-# commented out. workflow/lib/cloud_import.py and its unit tests are untouched, so
-# re-enabling means uncommenting these four call sites -- nothing needs rewriting.
+# The feature ships OFF: set CLOUD_IMPORT_ENABLED=1 to turn it on. It is gated by
+# a flag rather than by commenting the code out, which is how it was carried
+# before -- five commented blocks across frontend.py, static/app.js and
+# templates/index.html that had to be restored together, could not be linted,
+# refactored or tested, and had already gone stale (they referenced helpers this
+# module no longer defines). Behaviour with the flag unset is what commenting it
+# out gave: both routes answer 404.
+CLOUD_IMPORT_ENABLED = os.environ.get("CLOUD_IMPORT_ENABLED") == "1"
+MAX_CONCURRENT_CLOUD_IMPORTS = max(1, int(os.environ.get("MAX_CONCURRENT_CLOUD_IMPORTS", "2")))
 
-# MAX_CONCURRENT_CLOUD_IMPORTS = max(1, int(os.environ.get("MAX_CONCURRENT_CLOUD_IMPORTS", "2")))
-#
-#
-# def _complete_cloud_import(job_id, import_result, upload_form):
-# 	"""Finalize a completed cloud transfer through the same S3/run path as uploads."""
-# 	_release_local_raw(
-# 		job_id,
-# 		*_backup_raw_files_to_s3(
-# 			job_id,
-# 			_raw_paths_for_isolates(job_id, import_result["added"] + import_result["updated"]),
-# 		),
-# 	)
-# 	import_result["auto_run"] = _auto_run_if_requested(job_id, upload_form)
-#
-#
-# _cloud_import_manager = CloudImportManager(
-# 	_import_service, MAX_CONCURRENT_CLOUD_IMPORTS, _complete_cloud_import
-# )
-# _CLOUD_IMPORT_RECORD_TTL = _cloud_import_manager.record_ttl
-# _cloud_import_lock = _cloud_import_manager.lock
-# _cloud_imports = _cloud_import_manager.records
-#
-#
-# def _set_cloud_import(job_id, **fields):
-# 	_cloud_import_manager.set(job_id, **fields)
-#
-#
-# def _prune_cloud_imports():
-# 	_cloud_import_manager.prune()
-#
-#
-# def _run_cloud_import(job_id, share_url, upload_form):
-# 	_cloud_import_manager._run(
-# 		job_id, share_url, upload_form, job_samples_csv(job_id), job_data_dir(job_id)
-# 	)
-#
-#
-# @app.route("/cloud-import", methods=["POST"])
-# @limiter.limit("5/minute")
-# def cloud_import_start():
-# 	share_url = (request.form.get("share_url") or "").strip()
-# 	if not share_url:
-# 		return jsonify({"error": "Paste a OneDrive or Google Drive share link first."}), 400
-# 	# Refuse the link before a job ID exists: one we are never going to fetch
-# 	# should not leave an empty job behind for the retention sweep to clean up.
-# 	if not cloud_import.is_allowed_url(share_url) or cloud_import.provider_for(share_url) is None:
-# 		return jsonify(
-# 			{
-# 				"error": "Only Google Drive and OneDrive/SharePoint https:// share links can be imported."
-# 			}
-# 		), 400
-#
-# 	# Blank job_id starts a new batch; naming one pulls this link into it.
-# 	requested_job_id, job_error = _resolve_upload_job(request.form.get("job_id"))
-# 	if job_error:
-# 		return job_error
-#
-# 	# The thread outlives this request, so take a copy of what it needs now.
-# 	upload_form = {
-# 		field: request.form.get(field, "") for field in ("auto_run", "username", "password")
-# 	}
-#
-# 	job_id = requested_job_id
-# 	_cloud_import_manager.max_concurrent = MAX_CONCURRENT_CLOUD_IMPORTS
-# 	started, error_message = _cloud_import_manager.start(
-# 		job_id, share_url, upload_form, job_samples_csv(job_id), job_data_dir(job_id)
-# 	)
-# 	if not started:
-# 		status_code = 409 if "already has" in error_message else 429
-# 		return jsonify({"error": error_message}), status_code
-# 	return jsonify({"job_id": job_id, "state": "running"}), 202
-#
-#
-# @app.route("/cloud-import/status")
-# def cloud_import_status():
-# 	job_id = request.args.get("job_id")
-# 	_job_or_400(job_id)
-# 	import_record = _cloud_import_manager.get(job_id)
-# 	if import_record is None:
-# 		return jsonify({"error": "No cloud import found for this job ID"}), 404
-# 	return jsonify(import_record)
+
+def _complete_cloud_import(job_id, import_result, upload_form):
+	"""Finalize a completed cloud transfer through the same S3/run path as uploads."""
+	_import_service.release_local_raw(
+		job_id,
+		*_import_service.backup_raw_files(
+			job_id,
+			_import_service.raw_paths_for_isolates(
+				job_id,
+				import_result["added"] + import_result["updated"],
+				job_samples_csv(job_id),
+			),
+		),
+	)
+	import_result["auto_run"] = _auto_run_if_requested(job_id, upload_form)
+
+
+_cloud_import_manager = CloudImportManager(
+	_import_service, MAX_CONCURRENT_CLOUD_IMPORTS, _complete_cloud_import
+)
+# Seams the cloud-import tests reach through.
+_cloud_imports = _cloud_import_manager.records
+
+
+@app.route("/cloud-import", methods=["POST"])
+@limiter.limit("5/minute")
+def cloud_import_start():
+	if not CLOUD_IMPORT_ENABLED:
+		abort(404)
+	share_url = (request.form.get("share_url") or "").strip()
+	if not share_url:
+		return jsonify({"error": "Paste a OneDrive or Google Drive share link first."}), 400
+	# Refuse the link before a job ID exists: one we are never going to fetch
+	# should not leave an empty job behind for the retention sweep to clean up.
+	if not cloud_import.is_allowed_url(share_url) or cloud_import.provider_for(share_url) is None:
+		return jsonify(
+			{
+				"error": "Only Google Drive and OneDrive/SharePoint https:// share links can be imported."
+			}
+		), 400
+
+	# Blank job_id starts a new batch; naming one pulls this link into it.
+	job_id, job_error = _resolve_upload_job(request.form.get("job_id"))
+	if job_error:
+		return job_error
+
+	# The thread outlives this request, so take a copy of what it needs now.
+	upload_form = {
+		field: request.form.get(field, "") for field in ("auto_run", "username", "password")
+	}
+
+	_cloud_import_manager.max_concurrent = MAX_CONCURRENT_CLOUD_IMPORTS
+	started, error_message = _cloud_import_manager.start(
+		job_id, share_url, upload_form, job_samples_csv(job_id), job_data_dir(job_id)
+	)
+	if not started:
+		status_code = 409 if "already has" in error_message else 429
+		return jsonify({"error": error_message}), status_code
+	return jsonify({"job_id": job_id, "state": "running"}), 202
+
+
+@app.route("/cloud-import/status")
+def cloud_import_status():
+	if not CLOUD_IMPORT_ENABLED:
+		abort(404)
+	job_id = request.args.get("job_id")
+	_require_job(job_id, must_exist=False)
+	import_record = _cloud_import_manager.get(job_id)
+	if import_record is None:
+		return jsonify({"error": "No cloud import found for this job ID"}), 404
+	return jsonify(import_record)
 
 
 @app.route("/run", methods=["POST"])
 def run_pipeline():
-	job_id = request.form.get("job_id")
-	_job_or_400(job_id)
-
-	authentication_error = _authenticate_job(
-		job_id,
-		request.form.get("username", "").strip(),
-		request.form.get("password", "").strip(),
-	)
-	if authentication_error:
-		return jsonify({"error": authentication_error}), 401
-
-	run_payload, run_status_code = _admit_pipeline_run(job_id)
+	job_id = _require_job(request.form.get("job_id"), must_exist=False)
+	run_payload, run_status_code = _login_and_admit(job_id, request.form)
 	return jsonify(run_payload), run_status_code
 
 
@@ -1175,15 +999,15 @@ def run_pipeline():
 def abort_pipeline():
 	"""Stop a run's process group, escalating to SIGKILL after a grace period."""
 	job_id = request.form.get("job_id")
-	_job_or_400(job_id)
-	with _pipeline_lock:
+	_require_job(job_id, must_exist=False)
+	with _pipeline_manager.lock:
 		# Still waiting for a slot: it has no process to signal, so drop it from
 		# the queue and record the outcome here -- no watcher will ever run for it.
-		if job_id in _pipeline_queue:
-			_pipeline_queue.remove(job_id)
-			_persist_pipeline_queue()
-			_pipeline_aborted_jobs.discard(job_id)
-			_write_job_status(job_id, False, aborted=True)
+		if job_id in _pipeline_manager.queue:
+			_pipeline_manager.queue.remove(job_id)
+			_pipeline_manager.persist_queue()
+			_pipeline_manager.aborted_jobs.discard(job_id)
+			_pipeline_manager._write_status(job_id, False, aborted=True)
 			cancelled_before_starting = True
 		else:
 			cancelled_before_starting = False
@@ -1191,18 +1015,18 @@ def abort_pipeline():
 	if cancelled_before_starting:
 		# Nothing needs these reads any more, so put them back on the expiry clock.
 		# Outside the lock: this talks to S3.
-		_return_raw_to_the_clock(job_id)
+		_pipeline_manager.return_raw(job_id)
 		return jsonify({"message": "Queued run cancelled", "job_id": job_id}), 200
 
-	with _pipeline_lock:
+	with _pipeline_manager.lock:
 		# Already running: signal it. Its watcher records the abort and returns the
 		# reads to the expiry clock, so there is nothing to do for them here.
-		pipeline_process = _pipeline_processes.get(job_id)
+		pipeline_process = _pipeline_manager.processes.get(job_id)
 		if pipeline_process is None or pipeline_process.poll() is not None:
 			return jsonify(
 				{"error": "No pipeline run is currently in progress for this job ID"}
 			), 409
-		_pipeline_aborted_jobs.add(job_id)
+		_pipeline_manager.aborted_jobs.add(job_id)
 	try:
 		os.killpg(os.getpgid(pipeline_process.pid), signal.SIGTERM)
 	except ProcessLookupError:
@@ -1225,8 +1049,11 @@ def abort_pipeline():
 @app.route("/status")
 def pipeline_status():
 	job_id = request.args.get("job_id")
-	_job_or_400(job_id)
-	if not job_samples_csv(job_id).exists():
+	# must_exist=False on purpose: the poll loop in static/app.js reads
+	# `data.error` off this response to decide when to stop polling, so an unknown
+	# job has to come back as a JSON body rather than as an abort(404) HTML page.
+	_require_job(job_id, must_exist=False)
+	if not job_samples_csv(job_id).is_file():
 		return jsonify({"error": "No run found for this job ID"}), 404
 	run_status = _job_snapshot(job_id)["run_status"]
 	if run_status is None:
@@ -1237,15 +1064,13 @@ def pipeline_status():
 @app.route("/job/<job_id>")
 @limiter.limit("10/minute", override_defaults=False)
 def job_lookup(job_id):
-	_job_or_400(job_id)
-	if not job_samples_csv(job_id).is_file():
-		abort(404)
+	_require_job(job_id)
 	return jsonify(_job_snapshot(job_id))
 
 
 @app.route("/results/<job_id>/<isolate_id>/view")
 def view_result(job_id, isolate_id):
-	_job_or_400(job_id)
+	_require_job(job_id, must_exist=False)
 	if not is_valid_isolate_id(isolate_id):
 		abort(404)
 	resolved_path = _resolve_result_dir(job_id, isolate_id)
@@ -1290,7 +1115,7 @@ def _zip_stream_response(directory, arc_root, download_name):
 # the object exists), which is what makes the fallback safe to hang off it.
 @app.route("/results/<job_id>/<isolate_id>/download")
 def download_result(job_id, isolate_id):
-	_job_or_400(job_id)
+	_require_job(job_id, must_exist=False)
 	if not is_valid_isolate_id(isolate_id):
 		abort(404)
 	download_url = s3_storage.presigned_download_url(
@@ -1308,10 +1133,10 @@ def download_result(job_id, isolate_id):
 
 @app.route("/results/<job_id>/download-all")
 def download_all_results(job_id):
-	_job_or_400(job_id)
+	_require_job(job_id, must_exist=False)
 	# Downloading results counts as viewing them: start the 3-hour TTL clock so a
 	# user who jumps straight to the archive still gets the full download window.
-	_mark_first_viewed(job_id)
+	_job_store.mark_first_viewed(job_id)
 	download_url = s3_storage.presigned_download_url(
 		s3_storage.key_for(job_id, f"{job_id}_results.zip"),
 		filename=f"{job_id}_results.zip",
@@ -1327,10 +1152,10 @@ def download_all_results(job_id):
 
 @app.route("/results/<job_id>/master-report/download")
 def download_master_report(job_id):
-	_job_or_400(job_id)
+	_require_job(job_id, must_exist=False)
 	# Downloading results counts as viewing them: start the 3-hour TTL clock so a
 	# user who jumps straight to the archive still gets the full download window.
-	_mark_first_viewed(job_id)
+	_job_store.mark_first_viewed(job_id)
 	resolved_path = job_results_dir(job_id) / "master_report.csv"
 	if resolved_path.is_file():
 		return send_file(

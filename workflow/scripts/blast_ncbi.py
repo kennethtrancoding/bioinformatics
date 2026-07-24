@@ -35,13 +35,20 @@ is informational, and the report/pipeline shouldn't hang on a flaky service.
 """
 
 import argparse
-import csv
 import json
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
+
+# Runs under the blast env's own interpreter (see workflow/envs/blast.yml), not
+# as a Snakemake `script:`, so the scripts directory is not already on the path.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from report_io import write_csv as _write_csv  # noqa: E402
+from rgi_json import aro_category_names, iter_hits  # noqa: E402
 
 # outfmt 6 columns we request from blastp. Rich set so the saved full output
 # keeps alignment stats, taxonomy and the subject title (organism + plasmid/
@@ -68,47 +75,6 @@ _PLASMID_RE = re.compile(r"\bplasmid\b", re.I)
 _CHROMOSOME_RE = re.compile(r"\bchromosome\b", re.I)
 
 
-def _looks_like_hit(node_value):
-	return isinstance(node_value, dict) and (
-		"ARO_name" in node_value or "type_match" in node_value or "model_name" in node_value
-	)
-
-
-def _mechanisms(hit):
-	"""Resistance-mechanism names attached to an RGI hit (via ARO_category)."""
-	mechanism_names = []
-	for category in (hit.get("ARO_category") or {}).values():
-		if category.get("category_aro_class_name") == "Resistance Mechanism":
-			mechanism_name = category.get("category_aro_name")
-			if mechanism_name:
-				mechanism_names.append(mechanism_name)
-	return mechanism_names
-
-
-def collect_hits(rgi_data):
-	"""Walk an RGI results JSON and yield a flat list of resistance-gene hits."""
-	hits = []
-
-	def _walk(node, contig):
-		if isinstance(node, dict):
-			for node_key, node_value in node.items():
-				if isinstance(node_key, str) and node_key.startswith("_"):
-					continue
-				if _looks_like_hit(node_value):
-					hits.append((node_key, node_value, contig))
-				elif isinstance(node_value, (dict, list)):
-					next_contig = (
-						node_key if contig is None and isinstance(node_key, str) else contig
-					)
-					_walk(node_value, next_contig)
-		elif isinstance(node, list):
-			for node_item in node:
-				_walk(node_item, contig)
-
-	_walk(rgi_data, None)
-	return hits
-
-
 def select_queries(rgi_data, mechanism, max_queries):
 	"""Pick the enzymes to BLAST: mechanism matches (e.g. 'antibiotic inactivation'),
 	de-duplicated by gene+sequence, sorted most-novel-first (lowest CARD identity).
@@ -116,11 +82,11 @@ def select_queries(rgi_data, mechanism, max_queries):
 	Returns a list of dicts with sequence + metadata."""
 	mechanism_filter_lower = (mechanism or "").lower()
 	selected, seen = [], set()
-	for orf_id, hit, contig in collect_hits(rgi_data):
+	for orf_id, hit, contig in iter_hits(rgi_data):
 		protein_sequence = hit.get("orf_prot_sequence") or hit.get("query")
 		if not protein_sequence:
 			continue
-		mechanism_names = _mechanisms(hit)
+		mechanism_names = aro_category_names(hit, "Resistance Mechanism")
 		if mechanism_filter_lower and not any(
 			mechanism_filter_lower in mechanism_name.lower() for mechanism_name in mechanism_names
 		):
@@ -211,14 +177,6 @@ FIELDS = [
 
 SOURCE_LOCAL = "AMR catalog (local)"
 SOURCE_REMOTE = "NCBI nr (remote)"
-
-
-def _write_csv(output_path, output_rows):
-	Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-	with open(output_path, "w", newline="") as file_handle:
-		csv_writer = csv.DictWriter(file_handle, fieldnames=FIELDS)
-		csv_writer.writeheader()
-		csv_writer.writerows(output_rows)
 
 
 def local_db_is_ready(local_db):
@@ -361,6 +319,7 @@ def main(argv=None):
 	except (OSError, ValueError) as exception:
 		_write_csv(
 			parsed_args.out,
+			FIELDS,
 			[{"query_gene": "", "note": f"could not read RGI results: {exception}"}],
 		)
 		_write_full("", failure_note=f"could not read RGI results: {exception}")
@@ -371,6 +330,7 @@ def main(argv=None):
 	if not queries:
 		_write_csv(
 			parsed_args.out,
+			FIELDS,
 			[{"query_gene": "", "note": f"no '{parsed_args.mechanism}' enzymes to BLAST"}],
 		)
 		_write_full("", failure_note=f"no '{parsed_args.mechanism}' enzymes to BLAST")
@@ -493,7 +453,7 @@ def main(argv=None):
 		output_rows.append(output_row)
 	blast_error = combined_note
 
-	_write_csv(parsed_args.out, output_rows)
+	_write_csv(parsed_args.out, FIELDS, output_rows)
 	from_local = sum(1 for row in output_rows if row.get("source") == SOURCE_LOCAL)
 	from_remote = sum(1 for row in output_rows if row.get("source") == SOURCE_REMOTE)
 	unresolved = sum(1 for row in output_rows if not row.get("source"))

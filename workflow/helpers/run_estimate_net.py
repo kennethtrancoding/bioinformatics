@@ -1,5 +1,5 @@
 """The learned half of the run estimate: a small network that corrects the
-arithmetic model in lib/run_estimates.py.
+arithmetic model in workflow/helpers/run_estimates.py.
 
 WHY A NETWORK CORRECTS THE MODEL INSTEAD OF REPLACING IT
 
@@ -69,7 +69,7 @@ import numpy as np
 
 
 # Runs that must have finished on this instance before the network is allowed to
-# say anything. Below this it defers to the median (lib/run_estimates.calibration).
+# say anything. Below this it defers to the median (run_estimates.calibration).
 #
 # Not a tuning knob so much as an honesty threshold. The history holds at most
 # HISTORY_LIMIT (25) runs and the target is mostly BV-BRC's queue, so a fit on

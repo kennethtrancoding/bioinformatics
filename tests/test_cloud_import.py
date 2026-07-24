@@ -343,10 +343,10 @@ class TestLinkParsing(unittest.TestCase):
 
 
 # End-to-end behavior
-# The cloud import feature is disabled: frontend.py's /cloud-import routes are
-# commented out, so everything below -- which drives those routes -- is skipped.
-# The allowlist, redirect-guard and link-parsing tests above exercise
-# workflow/lib/cloud_import.py directly, which is untouched, so they still run.
+# The cloud import feature ships off (CLOUD_IMPORT_ENABLED), and its routes
+# answer 404 while it is. These drive the routes, so they turn the flag on for
+# the duration rather than being skipped: the code path is real either way, and
+# leaving it untested is how it went stale the last time it was switched off.
 class Base(unittest.TestCase):
 	@classmethod
 	def setUpClass(cls):
@@ -356,6 +356,11 @@ class Base(unittest.TestCase):
 	def setUp(self):
 		frontend.limiter.enabled = False
 		frontend._cloud_imports.clear()
+		self._cloud_import_was_enabled = frontend.CLOUD_IMPORT_ENABLED
+		frontend.CLOUD_IMPORT_ENABLED = True
+		self.addCleanup(
+			lambda: setattr(frontend, "CLOUD_IMPORT_ENABLED", self._cloud_import_was_enabled)
+		)
 
 	def wait_for(self, job_id, timeout=30):
 		deadline = time.time() + timeout
@@ -380,7 +385,6 @@ class Base(unittest.TestCase):
 			return job_id, self.wait_for(job_id)
 
 
-@unittest.skip("Cloud import is disabled; these tests drive the /cloud-import routes.")
 class TestGoogleDriveImport(Base):
 	def setUp(self):
 		super().setUp()
@@ -444,7 +448,7 @@ class TestGoogleDriveImport(Base):
 		# ...and it is a job like any other: same manifest, same data dir, so
 		# /run and /job cannot tell it apart from an uploaded batch.
 		self.assertTrue(jobs.is_valid_job_id(job_id))
-		rows, _ = frontend._read_samples(jobs.job_samples_csv(job_id))
+		rows, _ = frontend._job_store.read_samples(jobs.job_samples_csv(job_id))
 		self.assertEqual([row["isolate_id"] for row in rows], ["GOOD_S1"])
 		for row in rows:
 			self.assertTrue((jobs.PROJECT_ROOT / row["R1_path"]).is_file(), row["R1_path"])
@@ -503,7 +507,6 @@ class TestGoogleDriveImport(Base):
 		self.assertIn("limit for one import", record["error"])
 
 
-@unittest.skip("Cloud import is disabled; these tests drive the /cloud-import routes.")
 class TestOneDriveImport(Base):
 	def test_shared_onedrive_folder_imports_through_the_content_host(self):
 		r1, r2 = fastq_bytes(1, "r1"), fastq_bytes(1, "r2")
@@ -521,11 +524,10 @@ class TestOneDriveImport(Base):
 		self.assertEqual(record["result"]["verified"], ["OD1_S9"])
 		self.assertEqual(record["result"]["provider"], "onedrive")
 
-		rows, _ = frontend._read_samples(jobs.job_samples_csv(job_id))
+		rows, _ = frontend._job_store.read_samples(jobs.job_samples_csv(job_id))
 		self.assertEqual([row["isolate_id"] for row in rows], ["OD1_S9"])
 
 
-@unittest.skip("Cloud import is disabled; these tests drive the /cloud-import routes.")
 class TestCloudImportRoute(Base):
 	def test_link_off_the_allowlist_is_refused_without_creating_a_job(self):
 		response = self.client.post(
@@ -551,12 +553,13 @@ class TestCloudImportRoute(Base):
 		self.assertEqual(self.client.get("/cloud-import/status?job_id=nope").status_code, 400)
 
 	def test_finished_records_are_pruned(self):
+		manager = frontend._cloud_import_manager
 		frontend._cloud_imports["AAAAAAAAAAAA"] = {
 			"state": "done",
-			"finished_at": time.time() - frontend._CLOUD_IMPORT_RECORD_TTL - 1,
+			"finished_at": time.time() - manager.record_ttl - 1,
 		}
 		frontend._cloud_imports["BBBBBBBBBBBB"] = {"state": "running", "finished_at": None}
-		frontend._prune_cloud_imports()
+		manager.prune()
 		self.assertNotIn("AAAAAAAAAAAA", frontend._cloud_imports)
 		self.assertIn("BBBBBBBBBBBB", frontend._cloud_imports)
 

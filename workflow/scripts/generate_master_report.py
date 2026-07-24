@@ -5,10 +5,10 @@ MLST sequence type, beta-lactamase genes, antibiotic-inactivation genes,
 and the mobile elements themselves.
 """
 
-import csv
-import json
 from collections import Counter
 from pathlib import Path
+
+from report_io import read_csv_rows, read_json, write_csv
 
 sample_ids = snakemake.params.sample_ids
 card_files = snakemake.input.card
@@ -20,42 +20,25 @@ report_file = snakemake.output.csv_report
 Path(report_file).parent.mkdir(parents=True, exist_ok=True)
 
 
-def _safe_spreadsheet_value(value):
-	"""Prevent downloaded CSV cells from being interpreted as formulas."""
-	if isinstance(value, str) and value.startswith(("=", "+", "-", "@", "\t", "\r")):
-		return "'" + value
-	return value
-
-
-def _mlst_data(input_path):
-	if not Path(input_path).exists():
-		return {}
-	with open(input_path) as file_handle:
-		return json.load(file_handle)
-
-
 def _resistance_summary(input_path):
 	"""Return (beta_lactamase_genes: list[str], antibiotic_inactivation_genes: list[str])."""
 	beta_lactamase_genes = []
 	inactivation_genes = []
-	if not Path(input_path).exists():
-		return beta_lactamase_genes, inactivation_genes
-	with open(input_path, newline="") as file_handle:
-		for csv_row in csv.DictReader(file_handle):
-			# Keep only Perfect/Strict RGI calls. Loose hits are low-identity
-			# partial/homology matches -- a genome yields dozens of them, and they
-			# would otherwise flood these category columns with spurious genes.
-			if (csv_row.get("cut_off") or "").strip().lower() == "loose":
-				continue
-			family = (csv_row.get("amr_gene_family") or "").lower()
-			mechanism = (csv_row.get("resistance_mechanism") or "").lower()
-			gene = csv_row.get("best_hit_aro") or csv_row.get("model_name") or ""
-			if not gene:
-				continue
-			if "beta-lactamase" in family:
-				beta_lactamase_genes.append(gene)
-			if "antibiotic inactivation" in mechanism:
-				inactivation_genes.append(gene)
+	for csv_row in read_csv_rows(input_path):
+		# Keep only Perfect/Strict RGI calls. Loose hits are low-identity
+		# partial/homology matches -- a genome yields dozens of them, and they
+		# would otherwise flood these category columns with spurious genes.
+		if (csv_row.get("cut_off") or "").strip().lower() == "loose":
+			continue
+		family = (csv_row.get("amr_gene_family") or "").lower()
+		mechanism = (csv_row.get("resistance_mechanism") or "").lower()
+		gene = csv_row.get("best_hit_aro") or csv_row.get("model_name") or ""
+		if not gene:
+			continue
+		if "beta-lactamase" in family:
+			beta_lactamase_genes.append(gene)
+		if "antibiotic inactivation" in mechanism:
+			inactivation_genes.append(gene)
 	return sorted(set(beta_lactamase_genes)), sorted(set(inactivation_genes))
 
 
@@ -64,16 +47,11 @@ def _mobile_element_genes(input_path):
 
 	Reads mefinder's own call table rather than the type-count summary: the summary
 	says how many insertion sequences and MITEs there are, and a count cannot tell
-	you *which* element you are holding. mefinder writes several '#' comment lines
-	ahead of the header, so they have to be stripped -- csv would otherwise read the
-	first comment line as the field names."""
-	if not Path(input_path).exists():
-		return []
-	with open(input_path, newline="") as file_handle:
-		data_lines = [line for line in file_handle if not line.startswith("#")]
+	you *which* element you are holding. (read_csv_rows strips mefinder's '#'
+	comment banner, which csv would otherwise read as the field names.)"""
 	element_names = [
 		(csv_row.get("name") or "").strip()
-		for csv_row in csv.DictReader(data_lines)
+		for csv_row in read_csv_rows(input_path)
 		if (csv_row.get("name") or "").strip()
 	]
 	# One element can be called more than once (two copies of MITEEc1, say). Collapse
@@ -90,13 +68,7 @@ def _mobile_element_genes(input_path):
 def _mge_linked_genes(input_path):
 	"""Names of resistance genes found ON/near a mobile element (from the
 	co-location summary JSON) -- the tutorial's public-health signal."""
-	if not Path(input_path).exists():
-		return []
-	try:
-		with open(input_path) as file_handle:
-			return json.load(file_handle).get("mobile_element_linked_genes", []) or []
-	except (OSError, ValueError):
-		return []
+	return read_json(input_path).get("mobile_element_linked_genes", []) or []
 
 
 fieldnames = [
@@ -116,7 +88,7 @@ report_rows = []
 for sample_id, card_path, mlst_path, mobile_element_finder_path, colocation_path in zip(
  sample_ids, card_files, mlst_files, mobile_element_finder_files, colocation_files
 ):
-	mlst_data = _mlst_data(mlst_path)
+	mlst_data = read_json(mlst_path)
 	beta_lactamase_genes, inactivation_genes = _resistance_summary(card_path)
 	linked_genes = _mge_linked_genes(colocation_path)
 	mobile_element_genes = _mobile_element_genes(mobile_element_finder_path)
@@ -135,11 +107,6 @@ for sample_id, card_path, mlst_path, mobile_element_finder_path, colocation_path
 	 }
 	)
 
-with open(report_file, "w", newline="") as file_handle:
-	writer = csv.DictWriter(file_handle, fieldnames=fieldnames)
-	writer.writeheader()
-	writer.writerows(
-		[{key: _safe_spreadsheet_value(value) for key, value in row.items()} for row in report_rows]
-	)
+write_csv(report_file, fieldnames, report_rows)
 
 print(f"✓ Master report generated: {report_file} ({len(report_rows)} isolate(s))")

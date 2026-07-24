@@ -19,7 +19,14 @@ Writes, per sample:
 import argparse
 import csv
 import json
+import sys
 from pathlib import Path
+
+# Invoked as `python3 workflow/scripts/mge_colocation.py ...` from a shell rule,
+# so the scripts directory is not already on the path.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from rgi_json import extract_aro_category, iter_hits  # noqa: E402
 
 
 def _contig_token(contig_name):
@@ -60,22 +67,6 @@ def load_mges(mge_csv):
 	return mobile_genetic_elements
 
 
-def _looks_like_hit(node_value):
-	return isinstance(node_value, dict) and (
-		"ARO_name" in node_value or "type_match" in node_value or "model_name" in node_value
-	)
-
-
-def _mechanisms(hit):
-	mechanism_names = []
-	for category in (hit.get("ARO_category") or {}).values():
-		if category.get("category_aro_class_name") == "Resistance Mechanism":
-			contig_name = category.get("category_aro_name")
-			if contig_name:
-				mechanism_names.append(contig_name)
-	return mechanism_names
-
-
 def load_ar_genes(rgi_json):
 	"""Parse RGI results JSON into [{gene, mechanisms, contig, start, end}],
 	de-duplicated by (gene, contig, start, end)."""
@@ -88,45 +79,28 @@ def load_ar_genes(rgi_json):
 		return []
 
 	resistance_genes, seen = [], set()
-
-	def _walk(node, contig):
-		if isinstance(node, dict):
-			for node_key, node_value in node.items():
-				if isinstance(node_key, str) and node_key.startswith("_"):
-					continue
-				if _looks_like_hit(node_value):
-					start_position, end_position = (
-						_to_int(node_value.get("orf_start")),
-						_to_int(node_value.get("orf_end")),
-					)
-					contig_name = _contig_token(node_value.get("orf_from") or (contig or ""))
-					gene_name = node_value.get("ARO_name", "unknown")
-					gene_location_key = (gene_name, contig_name, start_position, end_position)
-					if (
-						start_position is not None
-						and end_position is not None
-						and gene_location_key not in seen
-					):
-						seen.add(gene_location_key)
-						resistance_genes.append(
-							{
-								"gene": gene_name,
-								"mechanisms": "; ".join(_mechanisms(node_value)),
-								"contig": contig_name,
-								"start": min(start_position, end_position),
-								"end": max(start_position, end_position),
-							}
-						)
-				elif isinstance(node_value, (dict, list)):
-					next_contig = (
-						node_key if contig is None and isinstance(node_key, str) else contig
-					)
-					_walk(node_value, next_contig)
-		elif isinstance(node, list):
-			for node_item in node:
-				_walk(node_item, contig)
-
-	_walk(rgi_data, None)
+	for _orf_id, hit, contig in iter_hits(rgi_data):
+		start_position, end_position = (
+			_to_int(hit.get("orf_start")),
+			_to_int(hit.get("orf_end")),
+		)
+		if start_position is None or end_position is None:
+			continue
+		contig_name = _contig_token(hit.get("orf_from") or (contig or ""))
+		gene_name = hit.get("ARO_name", "unknown")
+		gene_location_key = (gene_name, contig_name, start_position, end_position)
+		if gene_location_key in seen:
+			continue
+		seen.add(gene_location_key)
+		resistance_genes.append(
+			{
+				"gene": gene_name,
+				"mechanisms": extract_aro_category(hit, "Resistance Mechanism"),
+				"contig": contig_name,
+				"start": min(start_position, end_position),
+				"end": max(start_position, end_position),
+			}
+		)
 	return resistance_genes
 
 
