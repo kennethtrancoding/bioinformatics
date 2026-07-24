@@ -78,3 +78,4 @@ scratch_*.py
 # Local AMR BLAST database: a build artifact, rebuilt on demand by
 # workflow/scripts/build_amr_blastdb.py and baked fresh into the Docker image.
 resources/blastdb/
+.codegraphy/*

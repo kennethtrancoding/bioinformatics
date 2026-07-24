@@ -10,12 +10,9 @@ Settings page actually controls what the pipeline calls.
 import json
 import os
 import time
-from pathlib import Path
 from urllib.parse import urlparse
 
 import requests
-
-_HERE = Path(__file__).resolve().parent.parent
 
 # key: default definition, ordered the same way the pipeline uses them.
 # "wired" marks endpoints whose saved URL is read by the pipeline

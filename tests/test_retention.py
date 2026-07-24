@@ -99,7 +99,7 @@ class TestJobRecordDeletion(unittest.TestCase):
 	def test_expired_job_takes_its_id_with_it(self):
 		job_id = make_job(finished_ago=MAX_TTL + 60)
 		self.storage.add(job_id)
-		frontend._sweep_expired_results()
+		frontend._retention_service.sweep()
 		self.assertFalse(jobs.job_results_dir(job_id).is_dir(), "results survived")
 		self.assertFalse(jobs.job_config_dir(job_id).exists(), "job ID record outlived its results")
 		self.assertFalse(jobs.job_log_path(job_id).exists(), "run log outlived its job")
@@ -110,21 +110,21 @@ class TestJobRecordDeletion(unittest.TestCase):
 		or the view route keeps serving a job that was told to expire."""
 		job_id = make_job(finished_ago=VIEW_TTL + 60, viewed_ago=VIEW_TTL + 1)
 		self.storage.add(job_id)
-		frontend._sweep_expired_results()
+		frontend._retention_service.sweep()
 		self.assertEqual(self.storage.list_isolates(job_id), [], "S3 reports ignored the 3h rule")
 		self.assertFalse(jobs.job_config_dir(job_id).exists())
 
 	def test_live_job_keeps_its_id(self):
 		job_id = make_job(finished_ago=60, viewed_ago=60)
 		self.storage.add(job_id)
-		frontend._sweep_expired_results()
+		frontend._retention_service.sweep()
 		self.assertTrue(jobs.job_config_dir(job_id).is_dir(), "fresh job lost its record")
 		self.assertEqual(self.storage.list_isolates(job_id), ["SAMP"])
 
 	def test_pinned_job_keeps_its_id(self):
 		job_id = make_job(finished_ago=MAX_TTL * 2, viewed_ago=VIEW_TTL * 2, pinned=True)
 		self.storage.add(job_id)
-		frontend._sweep_expired_results()
+		frontend._retention_service.sweep()
 		self.assertTrue(jobs.job_config_dir(job_id).is_dir(), "pinned job lost its record")
 		self.assertEqual(self.storage.list_isolates(job_id), ["SAMP"], "pinned job lost its reports")
 
@@ -133,7 +133,7 @@ class TestJobRecordDeletion(unittest.TestCase):
 		ever collect its record."""
 		job_id = jobs.generate_job_id()
 		make_record(job_id, age=MAX_TTL + 60)
-		frontend._sweep_expired_results()
+		frontend._retention_service.sweep()
 		self.assertFalse(jobs.job_config_dir(job_id).exists(), "abandoned upload kept its ID forever")
 
 	def test_upload_waiting_to_be_run_keeps_its_id(self):
@@ -141,7 +141,7 @@ class TestJobRecordDeletion(unittest.TestCase):
 		must survive, or a job would be deleted between upload and Run."""
 		job_id = jobs.generate_job_id()
 		make_record(job_id, age=60)
-		frontend._sweep_expired_results()
+		frontend._retention_service.sweep()
 		self.assertTrue(jobs.job_config_dir(job_id).is_dir(), "pending upload was deleted")
 
 	def test_record_kept_while_stored_results_can_still_be_served(self):
@@ -150,7 +150,7 @@ class TestJobRecordDeletion(unittest.TestCase):
 		job_id = jobs.generate_job_id()
 		make_record(job_id, age=MAX_TTL + 60)
 		self.storage.add(job_id)
-		frontend._sweep_expired_results()
+		frontend._retention_service.sweep()
 		self.assertTrue(
 			jobs.job_config_dir(job_id).is_dir(),
 			"record deleted while S3 could still serve the job's results",
@@ -165,7 +165,7 @@ class TestJobRecordDeletion(unittest.TestCase):
 		self.storage.list_isolates = explode
 		job_id = jobs.generate_job_id()
 		make_record(job_id, age=MAX_TTL + 60)
-		frontend._sweep_expired_results()
+		frontend._retention_service.sweep()
 		self.assertTrue(
 			jobs.job_config_dir(job_id).is_dir(), "an S3 outage deleted a job's record"
 		)
@@ -181,7 +181,7 @@ class TestJobRecordDeletion(unittest.TestCase):
 		self.storage.delete_results = explode
 		job_id = make_job(finished_ago=MAX_TTL + 60)
 		self.storage.add(job_id)
-		frontend._sweep_expired_results()
+		frontend._retention_service.sweep()
 		self.assertTrue(
 			jobs.job_config_dir(job_id).is_dir(),
 			"record deleted even though its stored results survived",
@@ -194,35 +194,35 @@ class TestJobRecordDeletion(unittest.TestCase):
 		queue_path.write_text("[]")
 		old = time.time() - (MAX_TTL * 10)
 		os.utime(queue_path, (old, old))
-		frontend._sweep_expired_results()
+		frontend._retention_service.sweep()
 		self.assertTrue(queue_path.is_file(), "sweep ate the persisted pipeline queue")
 
 
 class TestRetention(unittest.TestCase):
 	def test_recently_viewed_results_are_kept(self):
 		job_id = make_job(finished_ago=60, viewed_ago=60)
-		frontend._sweep_expired_results()
+		frontend._retention_service.sweep()
 		self.assertTrue(jobs.job_results_dir(job_id).is_dir(), "fresh results were deleted")
 
 	def test_results_deleted_3h_after_first_view(self):
 		job_id = make_job(finished_ago=VIEW_TTL + 60, viewed_ago=VIEW_TTL + 1)
-		frontend._sweep_expired_results()
+		frontend._retention_service.sweep()
 		self.assertFalse(jobs.job_results_dir(job_id).is_dir(), "expired results were not deleted")
 		self.assertFalse(jobs.job_token_path(job_id).exists(), "BV-BRC token outlived results")
 
 	def test_unviewed_results_deleted_after_7_days(self):
 		job_id = make_job(finished_ago=MAX_TTL + 60, viewed_ago=None)
-		frontend._sweep_expired_results()
+		frontend._retention_service.sweep()
 		self.assertFalse(jobs.job_results_dir(job_id).is_dir(), "7-day safety net did not fire")
 
 	def test_unviewed_results_kept_before_7_days(self):
 		job_id = make_job(finished_ago=MAX_TTL - 3600, viewed_ago=None)
-		frontend._sweep_expired_results()
+		frontend._retention_service.sweep()
 		self.assertTrue(jobs.job_results_dir(job_id).is_dir())
 
 	def test_pinned_job_is_never_deleted(self):
 		job_id = make_job(finished_ago=MAX_TTL * 2, viewed_ago=VIEW_TTL * 2, pinned=True)
-		frontend._sweep_expired_results()
+		frontend._retention_service.sweep()
 		self.assertTrue(jobs.job_results_dir(job_id).is_dir(), "pinned demo job was deleted")
 
 	def test_running_job_is_never_deleted(self):
@@ -231,7 +231,7 @@ class TestRetention(unittest.TestCase):
 		results = jobs.job_results_dir(job_id)
 		results.mkdir(parents=True, exist_ok=True)
 		(results / "partial.txt").write_text("in progress")
-		frontend._sweep_expired_results()
+		frontend._retention_service.sweep()
 		self.assertTrue(results.is_dir(), "in-progress run was deleted")
 
 	def test_abandoned_upload_token_expires(self):
@@ -242,7 +242,7 @@ class TestRetention(unittest.TestCase):
 		tok.write_text(json.dumps({"access_token": "t"}))
 		old = time.time() - (MAX_TTL + 60)
 		os.utime(tok, (old, old))
-		frontend._sweep_expired_results()
+		frontend._retention_service.sweep()
 		self.assertFalse(tok.exists(), "stale token was not destroyed")
 
 	def test_stray_directory_does_not_wedge_the_sweep(self):
@@ -260,7 +260,7 @@ class TestRetention(unittest.TestCase):
 
 		expired = make_job(finished_ago=MAX_TTL + 60)
 		try:
-			frontend._sweep_expired_results()
+			frontend._retention_service.sweep()
 		except Exception as exc:
 			self.fail(f"sweep crashed on a stray directory: {exc!r}")
 		finally:

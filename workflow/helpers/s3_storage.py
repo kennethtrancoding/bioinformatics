@@ -5,20 +5,21 @@ Local disk under results/<JOB_ID>/ remains the working directory Snakemake
 writes to during a run, and stays the fastest path for viewing/downloading a
 job immediately after it finishes. When RESULTS_S3_BUCKET is set, a
 successful job's reports are also pushed to S3 so they survive the local
-retention sweep (frontend.py's _expire_job_results) and EC2 instance
+retention sweep (RetentionService._expire_results) and EC2 instance
 replacement. Every function here is a no-op / returns a falsy value when the
 bucket is not configured, so S3 stays entirely optional -- local dev and
 tests never need it.
 """
 
-import io
 import os
-import zipfile
+import tempfile
 from pathlib import Path
 
 import boto3
 from boto3.s3.transfer import TransferConfig
 from botocore.exceptions import ClientError
+
+from workflow.helpers.utils import stream_directory_zip
 
 _BUCKET = os.environ.get("RESULTS_S3_BUCKET")
 _PREFIX = os.environ.get("RESULTS_S3_PREFIX", "results").strip("/")
@@ -55,14 +56,23 @@ def raw_key_for(job_id: str, *parts: str) -> str:
 	return "/".join([_RAW_PREFIX, job_id, *parts])
 
 
-def _zip_directory(directory: Path, arc_root: str) -> io.BytesIO:
-	buffer = io.BytesIO()
-	with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-		for file_path in Path(directory).rglob("*"):
-			if file_path.is_file():
-				archive.write(file_path, Path(arc_root) / file_path.relative_to(directory))
-	buffer.seek(0)
-	return buffer
+def _upload_directory_zip(directory: Path, arc_root: str, key: str) -> None:
+	"""Zip a directory to S3 without ever holding the archive in memory.
+
+	This runs in the web process -- PipelineManager.watch spawns it as a thread
+	when a run finishes -- and a whole-job archive is every isolate's assembly,
+	BLAST output and reports at once. Buffering that into a BytesIO is what
+	stream_directory_zip exists to avoid: it is large enough to get the single
+	web worker OOM-killed, taking the site down along with any run in flight.
+
+	The archive is spooled to a temp file instead, so peak memory is one chunk
+	regardless of job size, and boto3 still gets the seekable handle multipart
+	uploads want."""
+	with tempfile.TemporaryFile() as spooled_archive:
+		for chunk in stream_directory_zip(directory, arc_root):
+			spooled_archive.write(chunk)
+		spooled_archive.seek(0)
+		_client.upload_fileobj(spooled_archive, _BUCKET, key)
 
 
 def upload_job_results(job_id: str, results_dir: Path) -> None:
@@ -90,16 +100,12 @@ def upload_job_results(job_id: str, results_dir: Path) -> None:
 			key_for(job_id, isolate_id, "report.html"),
 			ExtraArgs={"ContentType": "text/html"},
 		)
-		_client.upload_fileobj(
-			_zip_directory(isolate_dir, isolate_id),
-			_BUCKET,
-			key_for(job_id, f"{isolate_id}_results.zip"),
+		_upload_directory_zip(
+			isolate_dir, isolate_id, key_for(job_id, f"{isolate_id}_results.zip")
 		)
 
 	if isolate_dirs:
-		_client.upload_fileobj(
-			_zip_directory(results_dir, job_id), _BUCKET, key_for(job_id, f"{job_id}_results.zip")
-		)
+		_upload_directory_zip(results_dir, job_id, key_for(job_id, f"{job_id}_results.zip"))
 
 
 def upload_raw_file(job_id: str, file_path: Path) -> None:

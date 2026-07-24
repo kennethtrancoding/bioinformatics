@@ -6,7 +6,7 @@ Evaluate novelty of resistance genes
 import json
 from pathlib import Path
 
-from rgi_json_to_csv import (
+from rgi_json import (
 	TAB_COVERAGE_COLUMN,
 	extract_aro_category,
 	load_tab_report,

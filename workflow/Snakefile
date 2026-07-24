@@ -3,8 +3,8 @@ Main Snakemake workflow for bioinformatic genome analysis pipeline.
 Orchestrates: QC → BV-BRC assembly → local analysis (CARD, BLAST, MLST) → reports
 """
 
+import csv
 import os
-import pandas as pd
 from pathlib import Path
 
 # Configuration
@@ -15,7 +15,7 @@ configfile: "config/config.yaml"
 #
 # Snakemake normally clamps `threads` down to `--cores`, and on a plain run that
 # is what keeps a rule from asking for more threads than the box has. Here it is
-# not: `--cores` is a job-slot budget, not a CPU count (see lib/pipeline_manager.py),
+# not: `--cores` is a job-slot budget, not a CPU count (see workflow/helpers/pipeline_manager.py),
 # sized so dozens of samples can sit waiting on BV-BRC at once. It is therefore
 # always far above the real core count and never binds.
 #
@@ -32,10 +32,14 @@ configfile: "config/config.yaml"
 HOST_CORES = os.cpu_count() or 1
 PIPELINE_CORES = max(1, min(int(config.get('pipeline_cores', HOST_CORES)), HOST_CORES))
 
+# Plain csv rather than pandas: the manifest is four columns, the rules only ever
+# index a row by column name (SAMPLES[sample]['R1_path']), and a DictReader row
+# supports that identically. Carrying pandas for this one call cost ~50 MB in
+# every conda env build.
 SAMPLES = {}
 if os.path.exists(config['samples_manifest']):
-    samples_dataframe = pd.read_csv(config['samples_manifest'])
-    SAMPLES = {sample_row['isolate_id']: sample_row for row_index, sample_row in samples_dataframe.iterrows()}
+    with open(config['samples_manifest'], newline='') as manifest_file:
+        SAMPLES = {row['isolate_id']: row for row in csv.DictReader(manifest_file)}
     print(f"Loaded {len(SAMPLES)} samples")
 else:
     print(f"Warning: Sample manifest not found: {config['samples_manifest']}")

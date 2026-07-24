@@ -2,11 +2,10 @@ name: bvbrc
 channels:
     - conda-forge
     - defaults
+# The rules in this env run bvbrc_cga / bvbrc_upload / bvbrc_genus_finder, which
+# between them import json, sys, pathlib and (through bvbrc_client) requests.
+# pandas, numpy, pyyaml, tqdm and click were pinned here and imported by none of
+# them -- five exact pins to solve for, on every env build, for nothing.
 dependencies:
     - python=3.11
     - requests=2.31 # HTTP client for BV-BRC API
-    - pandas=2.0
-    - numpy=1.24
-    - pyyaml=6.0
-    - tqdm=4.65
-    - click=8.1

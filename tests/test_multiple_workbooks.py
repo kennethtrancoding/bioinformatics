@@ -166,7 +166,7 @@ class WorkbookPerSubfolder(unittest.TestCase):
 		result = response.get_json()
 
 		# FASTQs are paired recursively, so both runs' samples land...
-		rows, _ = frontend._read_samples(jobs.job_samples_csv(result["job_id"]))
+		rows, _ = frontend._job_store.read_samples(jobs.job_samples_csv(result["job_id"]))
 		self.assertEqual(sorted(row["isolate_id"] for row in rows), ["SUBA_S1", "SUBB_S1"])
 		# ...and their checksums came up with them, so both should be verified.
 		self.assertEqual(

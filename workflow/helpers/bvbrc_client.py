@@ -28,10 +28,6 @@ def _require_safe_identifier(identifier_value: str, label: str) -> None:
 class BVBRCClient:
 	"""
 	BV-BRC API client for genome analysis workflow.
-
-	BV-BRC uses two JSON-RPC 1.1 services:
-	  - Workspace: https://p3.theseed.org/services/Workspace
-	  - AppService: https://p3.theseed.org/services/app_service
 	"""
 
 	AUTH_URL = "https://user.patricbrc.org/authenticate"
@@ -757,73 +753,7 @@ class BVBRCClient:
 				local_path.unlink()
 			return False
 
-	def download_assembly(self, job_output_path: str, local_dir: str, sample_id: str) -> bool:
-		"""
-		Download assembled contigs FASTA from job results.
-
-		Args:
-		    job_output_path: Remote output path from job
-		    local_dir: Local output directory
-		    sample_id: Sample identifier for filename
-
-		Returns:
-		    True if download successful
-		"""
-		try:
-			_require_safe_identifier(sample_id, "sample_id")
-
-			remote_fasta = f"{job_output_path}/assembly_contigs.fasta"
-			local_fasta = Path(local_dir) / f"{sample_id}_assembly_contigs.fasta"
-
-			Path(local_dir).mkdir(parents=True, exist_ok=True)
-
-			return self.download_file(remote_fasta, local_fasta)
-
-		except Exception as exception:
-			logger.error(f"Error downloading assembly: {exception}")
-			return False
-
-	def download_genome_report(self, job_output_path: str, local_dir: str, sample_id: str) -> bool:
-		"""
-		Download genome analysis report JSON.
-
-		Args:
-		    job_output_path: Remote output path from job
-		    local_dir: Local output directory
-		    sample_id: Sample identifier for filename
-
-		Returns:
-		    True if download successful
-		"""
-		try:
-			_require_safe_identifier(sample_id, "sample_id")
-
-			remote_report = f"{job_output_path}/genome_report.json"
-			local_report = Path(local_dir) / f"{sample_id}_genome_report.json"
-
-			Path(local_dir).mkdir(parents=True, exist_ok=True)
-
-			return self.download_file(remote_report, local_report)
-
-		except Exception as exception:
-			logger.error(f"Error downloading genome report: {exception}")
-			return False
-
 	# Utility Methods
-
-	def check_file_exists(self, remote_path: str) -> bool:
-		"""Check if a file exists in the BV-BRC workspace."""
-		try:
-			rpc_result = self._rpc(
-				self.WORKSPACE_URL,
-				"Workspace.get",
-				[{"objects": [remote_path], "metadata_only": 1}],
-				timeout=15,
-			)
-			return bool(rpc_result and rpc_result[0])
-		except Exception as exception:
-			logger.debug(f"Error checking file existence: {exception}")
-			return False
 
 	def list_workspace_files(self, workspace_path: str = None) -> List[Dict[str, Any]]:
 		"""List files in a workspace directory."""
@@ -889,6 +819,21 @@ class BVBRCClient:
 					)
 
 		return workspace_files
+
+
+def authenticated_client(token_file, job_id):
+	"""A logged-in client, or RuntimeError if this job has no valid token.
+
+	What every rule that talks to BV-BRC needs before it can do anything, and
+	the point at which a missing token should stop the rule rather than surface
+	later as an unexplained API failure. bvbrc_upload deliberately does not use
+	this -- it falls back to an interactive login instead of failing -- which is
+	the one place the difference is meaningful.
+	"""
+	client = BVBRCClient(token_file=token_file, job_id=job_id)
+	if not client.is_authenticated():
+		raise RuntimeError("BV-BRC not authenticated")
+	return client
 
 
 if __name__ == "__main__":

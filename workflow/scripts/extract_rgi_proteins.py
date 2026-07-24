@@ -11,6 +11,12 @@ import json
 import sys
 from pathlib import Path
 
+# Invoked as `python3 workflow/scripts/extract_rgi_proteins.py ...` from a shell
+# rule, so the scripts directory is not already on the path.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from rgi_json import iter_hits  # noqa: E402
+
 rgi_json = sys.argv[1]
 proteins_fasta = sys.argv[2]
 proteins_csv = sys.argv[3]
@@ -26,29 +32,7 @@ with open(rgi_json) as file_handle:
     rgi_data = json.load(file_handle)
 
 
-def _looks_like_hit(node_value):
-    return isinstance(node_value, dict) and (
-        "ARO_name" in node_value or "type_match" in node_value or "model_name" in node_value
-    )
-
-
-def _walk(node, contig, protein_rows):
-    if isinstance(node, dict):
-        for node_key, node_value in node.items():
-            if isinstance(node_key, str) and node_key.startswith("_"):
-                continue
-            if _looks_like_hit(node_value):
-                protein_rows.append((node_key, node_value, contig))
-            elif isinstance(node_value, (dict, list)):
-                next_contig = node_key if contig is None and isinstance(node_key, str) else contig
-                _walk(node_value, next_contig, protein_rows)
-    elif isinstance(node, list):
-        for node_item in node:
-            _walk(node_item, contig, protein_rows)
-
-
-hits = []
-_walk(rgi_data, None, hits)
+hits = list(iter_hits(rgi_data))
 
 with open(proteins_fasta, "w") as fasta_file_handle, open(proteins_csv, "w", newline="") as csv_file_handle:
     writer = csv.writer(csv_file_handle)

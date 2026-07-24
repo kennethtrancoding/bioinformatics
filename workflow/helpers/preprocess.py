@@ -1,9 +1,10 @@
 """
-FASTQ preprocessing and validation.
-Handles MD5 checksums, file integrity, and sample manifest parsing.
+FASTQ integrity and checksum verification.
+
+Reading the sample manifest is job_store.JobStore's job, not this module's --
+it owns the manifest's format and writes it atomically.
 """
 
-import csv
 import gzip
 from pathlib import Path
 from typing import Dict, List, Tuple
@@ -14,19 +15,6 @@ logger = setup_logger("preprocess")
 
 
 # FASTQ Validation
-
-
-def is_gzipped_fastq(file_path: str) -> bool:
-	"""
-	Check if file is a gzipped FASTQ.
-
-	Args:
-	    file_path: Path to file
-
-	Returns:
-	    True if gzipped, False if plain text
-	"""
-	return file_path.endswith(".fastq.gz") or file_path.endswith(".fq.gz")
 
 
 def scan_fastq(file_path: str) -> Tuple[int, str]:
@@ -45,7 +33,7 @@ def scan_fastq(file_path: str) -> Tuple[int, str]:
 	Returns:
 	    Tuple of (record_count, message); record_count is -1 when unreadable
 	"""
-	open_func = gzip.open if is_gzipped_fastq(file_path) else open
+	open_func = gzip.open if file_path.endswith((".fastq.gz", ".fq.gz")) else open
 
 	line_count = 0
 	try:
@@ -66,22 +54,6 @@ def scan_fastq(file_path: str) -> Tuple[int, str]:
 		return -1, f"line count ({line_count}) is not divisible by 4 (truncated?)"
 
 	return line_count // 4, "OK"
-
-
-def count_fastq_records(file_path: str) -> int:
-	"""
-	Count the FASTQ records in a file.
-
-	Args:
-	    file_path: Path to FASTQ file
-
-	Returns:
-	    Exact record count, or -1 if error
-	"""
-	record_count, message = scan_fastq(file_path)
-	if record_count < 0:
-		logger.error(f"Failed to count FASTQ records in {file_path}: {message}")
-	return record_count
 
 
 def validate_fastq_integrity(file_path: str) -> Tuple[bool, str]:
@@ -110,34 +82,6 @@ def validate_fastq_integrity(file_path: str) -> Tuple[bool, str]:
 # MD5 Verification
 
 
-def load_md5_checksums(checksum_file: str) -> Dict[str, str]:
-	"""
-	Load MD5 checksums from text file (md5sum format: <hash>  <filename>).
-
-	Args:
-	    checksum_file: Path to MD5 checksum file
-
-	Returns:
-	    Dictionary mapping filename -> MD5 hash
-	"""
-	checksums = {}
-
-	try:
-		with open(checksum_file, "r") as file_handle:
-			for fastq_line in file_handle:
-				checksum_parts = fastq_line.strip().split()
-				if len(checksum_parts) >= 2:
-					md5_hash = checksum_parts[0]
-					filename = checksum_parts[1].lstrip("*")
-					checksums[filename] = md5_hash
-	except FileNotFoundError:
-		logger.error(f"Checksum file not found: {checksum_file}")
-	except Exception as exception:
-		logger.error(f"Error parsing checksum file: {exception}")
-
-	return checksums
-
-
 def verify_file_md5(file_path: str, expected_md5: str) -> Tuple[bool, str]:
 	"""
 	Verify a file's MD5 checksum.
@@ -160,47 +104,6 @@ def verify_file_md5(file_path: str, expected_md5: str) -> Tuple[bool, str]:
 			return False, f"MD5 mismatch: expected {expected_md5}, got {actual_md5}"
 	except Exception as exception:
 		return False, f"Error computing MD5: {exception}"
-
-
-# Sample Manifest
-
-
-def load_sample_manifest(manifest_file: str) -> List[Dict[str, str]]:
-	"""
-	Load sample manifest CSV file.
-	Expected columns: isolate_id, R1_path, R2_path, [description]
-
-	Args:
-	    manifest_file: Path to samples.csv
-
-	Returns:
-	    List of sample dictionaries
-	"""
-	sample_records = []
-
-	if not Path(manifest_file).exists():
-		logger.error(f"Manifest file not found: {manifest_file}")
-		return sample_records
-
-	try:
-		with open(manifest_file, "r") as file_handle:
-			reader = csv.DictReader(file_handle)
-			for manifest_row in reader:
-				if (
-					manifest_row.get("isolate_id")
-					and manifest_row.get("R1_path")
-					and manifest_row.get("R2_path")
-				):
-					sample_records.append(manifest_row)
-				else:
-					logger.warning(f"Skipping incomplete row: {manifest_row}")
-
-		logger.info(f"Loaded {len(sample_records)} samples from {manifest_file}")
-		return sample_records
-
-	except Exception as exception:
-		logger.error(f"Error parsing manifest: {exception}")
-		return sample_records
 
 
 def validate_sample_files(sample: Dict[str, str]) -> Tuple[bool, List[str], Dict[str, int]]:
@@ -260,57 +163,3 @@ def validate_sample_files(sample: Dict[str, str]) -> Tuple[bool, List[str], Dict
 	return len(validation_errors) == 0, validation_errors, counts_by_read
 
 
-# Report Generation
-
-
-def generate_preprocess_report(sample_records: List[Dict[str, str]], output_file: str) -> bool:
-	"""
-	Generate preprocessing validation report.
-
-	Args:
-	    samples: List of sample dictionaries
-	    output_file: Path to output report
-
-	Returns:
-	    True if report generated successfully
-	"""
-	try:
-		with open(output_file, "w") as file_handle:
-			file_handle.write("# Preprocessing Validation Report\n\n")
-			file_handle.write(f"Total samples: {len(sample_records)}\n\n")
-
-			valid_count = 0
-			for sample in sample_records:
-				is_valid, validation_errors = validate_sample_files(sample)
-				validation_status = "✓ PASS" if is_valid else "✗ FAIL"
-				file_handle.write(f"## {sample.get('isolate_id')} [{validation_status}]\n")
-
-				if is_valid:
-					valid_count += 1
-					file_handle.write(f"- R1: {sample.get('R1_path')}\n")
-					file_handle.write(f"- R2: {sample.get('R2_path')}\n")
-				else:
-					for error in validation_errors:
-						file_handle.write(f"- ERROR: {error}\n")
-
-				file_handle.write("\n")
-
-			file_handle.write("\n## Summary\n")
-			file_handle.write(f"Valid samples: {valid_count}/{len(sample_records)}\n")
-
-		logger.info(f"Preprocessing report saved to {output_file}")
-		return True
-
-	except Exception as exception:
-		logger.error(f"Failed to generate report: {exception}")
-		return False
-
-
-if __name__ == "__main__":
-	sample_manifest = load_sample_manifest("config/samples.csv")
-	for sample in sample_manifest:
-		is_valid, validation_errors = validate_sample_files(sample)
-		if is_valid:
-			logger.info(f"✓ {sample['isolate_id']} is valid")
-		else:
-			logger.warning(f"✗ {sample['isolate_id']}: {'; '.join(validation_errors)}")

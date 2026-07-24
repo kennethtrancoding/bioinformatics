@@ -10,20 +10,24 @@ data/raw_fastq (matching the web upload).
 """
 
 import argparse
-import csv
 import json
 import re
 import shutil
 import sys
 from pathlib import Path
 
+from workflow.helpers.job_store import SAMPLE_FIELDS, JobStore
+from workflow.helpers.jobs import PROJECT_ROOT
 from workflow.helpers.preprocess import validate_sample_files
 from workflow.helpers.utils import compute_md5
 
-PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_SAMPLES_CSV = PROJECT_ROOT / "config" / "samples.csv"
 DEFAULT_DATA_DIR = PROJECT_ROOT / "data" / "raw_fastq"
-FIELDS = ["isolate_id", "R1_path", "R2_path", "description"]
+# The manifest's columns are JobStore's to define -- it is what reads and writes
+# them everywhere else. Aliased rather than re-listed so the two cannot drift.
+FIELDS = SAMPLE_FIELDS
+
+_job_store = JobStore()
 
 _FASTQ_SUFFIX = (".fastq.gz", ".fq.gz", ".fastq", ".fq")
 # The R1 marker is "_R1" followed by "_" or "." (e.g. _R1_001.fastq.gz or _R1.fastq.gz).
@@ -77,8 +81,19 @@ def is_fastq(file_name):
 	return file_name.lower().endswith(_FASTQ_SUFFIX)
 
 
-def _isolate_id(file_name):
-	"""SW4E1_S337_R1_001.fastq.gz -> SW4E1_S337"""
+def isolate_id_for(file_name):
+	"""SW4E1_S337_R1_001.fastq.gz -> SW4E1_S337
+
+	The single definition of how a read's filename maps to an isolate. Every
+	upload path goes through here -- the folder import below, and /submit and
+	/delete in frontend.py, which used to carry a looser pattern of their own
+	(``_R[12].*``, no separator guard, no anchor). That pattern took
+	SW_R1B_S3_R1_001.fastq.gz down to "SW" while this one gives "SW_R1B_S3", so
+	the same reads registered under different isolate IDs depending on which
+	route they arrived through, and a delete computed a third answer again.
+
+	static/app.js mirrors this to split a folder into batches without breaking a
+	pair across two of them; tests/test_batching.py pins the two together."""
 	return _ISOLATE_RE.sub("", file_name)
 
 
@@ -266,7 +281,7 @@ def pair_fastqs(directory, recursive=False):
 			warnings.append(f"No R2 mate for {file_name} (expected {mate_file_name}; skipped.")
 			continue
 
-		isolate_id = _isolate_id(file_name)
+		isolate_id = isolate_id_for(file_name)
 		if isolate_id in seen_isolates:
 			warnings.append(
 				f"Duplicate isolate '{isolate_id}' from {file_name}; keeping {seen_isolates[isolate_id]}."
@@ -301,14 +316,6 @@ def _relative_path(registered_path, start):
 		target_path_parts[common_prefix_length:]
 	)
 	return str(Path(*relative_path_parts)) if relative_path_parts else "."
-
-
-def _read_existing(samples_csv):
-	samples_csv = Path(samples_csv)
-	if not samples_csv.exists():
-		return []
-	with samples_csv.open(newline="") as file_handle:
-		return list(csv.DictReader(file_handle))
 
 
 def _copy_into(source_path, dest_dir, move=False):
@@ -434,7 +441,7 @@ def import_directory(
 		if checksum_source_names:
 			checksum_source_name = ", ".join(checksum_source_names)
 
-	manifest_rows = _read_existing(samples_csv)
+	manifest_rows, _ = _job_store.read_samples(samples_csv)
 	rows_by_isolate_id = {
 		manifest_row.get("isolate_id"): manifest_row for manifest_row in manifest_rows
 	}
@@ -516,15 +523,19 @@ def import_directory(
 		if on_pair_imported and dest_dir:
 			on_pair_imported(fastq_pair["isolate_id"], dict(registered_paths))
 
+	# Through JobStore, so the manifest lands atomically (write to .tmp, then
+	# os.replace). A bulk import can run for an hour; writing in place meant a
+	# crash partway through left a truncated manifest, losing samples that had
+	# already been registered and verified.
 	samples_csv = Path(samples_csv)
-	samples_csv.parent.mkdir(parents=True, exist_ok=True)
-	with samples_csv.open("w", newline="") as file_handle:
-		writer = csv.DictWriter(file_handle, fieldnames=FIELDS)
-		writer.writeheader()
-		for worksheet_row in rows_by_isolate_id.values():
-			writer.writerow(
-				{field_name: worksheet_row.get(field_name, "") for field_name in FIELDS}
-			)
+	_job_store.write_samples(
+		samples_csv,
+		[
+			{field_name: worksheet_row.get(field_name, "") for field_name in FIELDS}
+			for worksheet_row in rows_by_isolate_id.values()
+		],
+		FIELDS,
+	)
 
 	# Keep expected MD5s for QC-time verification; preserve prior imports.
 	if expected_checksums_by_sample:

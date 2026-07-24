@@ -46,7 +46,7 @@ rule fetch_raw_read:
     output:
         read = temp(f"{RAW_READS_DIR}/{{job}}/{{filename}}")
     wildcard_constraints:
-        # A job ID (see workflow/lib/jobs.py: 12 chars, no I/L/O/0/1) and a FASTQ
+        # A job ID (see workflow/helpers/jobs.py: 12 chars, no I/L/O/0/1) and a FASTQ
         # basename. Constrained so this rule cannot volunteer to produce arbitrary
         # paths elsewhere in the tree.
         job = r"[A-Z2-9]{12}",

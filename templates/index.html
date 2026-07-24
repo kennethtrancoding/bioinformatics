@@ -52,9 +52,12 @@
 			<p id="import-status"></p>
 		</fieldset>
 
-		<!-- Cloud import (OneDrive/Google Drive share links) is disabled. Re-enabling
-		     means restoring this fieldset, the handlers in static/app.js, and the
-		     /cloud-import routes in frontend.py.
+		{#
+		Cloud import (OneDrive/Google Drive share links) ships off; set
+		CLOUD_IMPORT_ENABLED=1 to turn it on. The handlers in static/app.js key off
+		this fieldset being present, so they no-op when it is not rendered.
+		#}
+		{% if cloud_import_enabled %}
 		<fieldset>
 			<h1>Import From OneDrive or Google Drive</h1>
 			<p>
@@ -70,7 +73,7 @@
 			<button id="cloud-import-btn">Add cloud files</button>
 			<p id="cloud-status"></p>
 		</fieldset>
-		-->
+		{% endif %}
 
 		<p id="job-banner">
 			Add files using the methods above, then press Run Pipeline. All files are batched under
