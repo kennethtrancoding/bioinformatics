@@ -10,7 +10,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path.cwd()))
 
-from workflow.helpers.bvbrc_client import BVBRCClient
+from workflow.helpers.bvbrc_client import authenticated_client
 from workflow.helpers.utils import setup_logger
 
 logger = setup_logger("bvbrc_genus_finder", snakemake.log[0])
@@ -31,12 +31,9 @@ workspace = upload_data["workspace"]
 max_wait = snakemake.config["bvbrc"]["max_wait_time"]
 poll_interval = snakemake.config["bvbrc"]["poll_interval"]
 
-client = BVBRCClient(
-	token_file=snakemake.config["bvbrc"]["token_file"],
-	job_id=snakemake.config.get("job_id"),
+client = authenticated_client(
+	snakemake.config["bvbrc"]["token_file"], snakemake.config.get("job_id")
 )
-if not client.is_authenticated():
-	raise RuntimeError("BV-BRC not authenticated")
 
 client.workspace = workspace
 genus = "Unknown"

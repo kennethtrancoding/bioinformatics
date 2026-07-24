@@ -17,7 +17,7 @@ import frontend  # noqa: E402
 from tests._isolation import REAL_ROOT  # noqa: F401  (must import first)
 from workflow.helpers import api_registry, import_samples, jobs, preprocess  # noqa: E402
 from workflow.helpers.bvbrc_client import BVBRCClient, _require_safe_identifier  # noqa: E402
-from workflow.helpers.utils import zip_directory  # noqa: E402
+from workflow.helpers.utils import stream_directory_zip  # noqa: E402
 
 ROOT = Path(frontend.PROJECT_ROOT)  # temp root, see tests/_isolation
 
@@ -60,9 +60,9 @@ class Base(unittest.TestCase):
 
 	def setUp(self):
 		frontend.limiter.enabled = False
-		frontend._pipeline_processes.clear()
-		frontend._pipeline_queue.clear()
-		frontend._pipeline_aborted_jobs.clear()
+		frontend._pipeline_manager.processes.clear()
+		frontend._pipeline_manager.queue.clear()
+		frontend._pipeline_manager.aborted_jobs.clear()
 
 	def upload_pair(self, name="SAMP1", r1_checksum=None):
 		r1, r2 = fastq_bytes(2, "r1"), fastq_bytes(2, "r2")
@@ -140,7 +140,7 @@ class TestSubmit(Base):
 		job_id = body["job_id"]
 		self.assertTrue(jobs.is_valid_job_id(job_id))
 		self.assertEqual(body["isolate_id"], "SAMPA")
-		rows, _ = frontend._read_samples(jobs.job_samples_csv(job_id))
+		rows, _ = frontend._job_store.read_samples(jobs.job_samples_csv(job_id))
 		self.assertEqual(rows[0]["isolate_id"], "SAMPA")
 		self.assertTrue((ROOT / rows[0]["R1_path"]).is_file())
 		self.assertTrue((ROOT / rows[0]["R2_path"]).is_file())
@@ -178,7 +178,7 @@ class TestSubmit(Base):
 			json={"job_id": job_id, "files": ["SAMPE_R1_001.fastq.gz", "SAMPE_R2_001.fastq.gz"]},
 		)
 		self.assertEqual(r.status_code, 200)
-		rows, _ = frontend._read_samples(jobs.job_samples_csv(job_id))
+		rows, _ = frontend._job_store.read_samples(jobs.job_samples_csv(job_id))
 		self.assertEqual(rows, [])
 		self.assertFalse((jobs.job_data_dir(job_id) / "SAMPE_R1_001.fastq.gz").exists())
 
@@ -203,7 +203,7 @@ class TestImport(Base):
 		body = r.get_json()
 		self.assertCountEqual(body["added"], ["IMPA_S1", "IMPB_S2"])
 		job_id = body["job_id"]
-		rows, _ = frontend._read_samples(jobs.job_samples_csv(job_id))
+		rows, _ = frontend._job_store.read_samples(jobs.job_samples_csv(job_id))
 		for row in rows:
 			self.assertTrue((ROOT / row["R1_path"]).is_file(), row["R1_path"])
 			self.assertTrue((ROOT / row["R2_path"]).is_file(), row["R2_path"])
@@ -233,7 +233,7 @@ class TestPipelineLifecycle(Base):
 		self.saved_max = frontend.MAX_CONCURRENT_PIPELINES
 
 	def tearDown(self):
-		for proc in list(frontend._pipeline_processes.values()):
+		for proc in list(frontend._pipeline_manager.processes.values()):
 			try:
 				proc.kill()
 			except Exception:
@@ -272,7 +272,7 @@ class TestPipelineLifecycle(Base):
 	def test_run_requires_samples(self):
 		job_id = self.upload_pair("EMPTYJOB").get_json()["job_id"]
 		token_for(job_id)
-		frontend._write_samples(jobs.job_samples_csv(job_id), [])
+		frontend._job_store.write_samples(jobs.job_samples_csv(job_id), [])
 		r = self.client.post("/run", data={"job_id": job_id})
 		self.assertEqual(r.status_code, 400)
 
@@ -322,12 +322,12 @@ class TestPipelineLifecycle(Base):
 		self.assertTrue(status["done"])
 		self.assertFalse(status["success"])
 		self.assertIn("aborted", status["error"].lower())
-		self.assertNotIn(b, frontend._pipeline_queue)
+		self.assertNotIn(b, frontend._pipeline_manager.queue)
 
 	def test_abort_running_job_kills_process_group(self):
 		job_id = self.ready_job("ABORTA")
 		self.client.post("/run", data={"job_id": job_id})
-		proc = frontend._pipeline_processes[job_id]
+		proc = frontend._pipeline_manager.processes[job_id]
 
 		r = self.client.post("/abort", data={"job_id": job_id})
 		self.assertEqual(r.status_code, 200)
@@ -758,11 +758,11 @@ class TestLibraries(Base):
 		self.assertEqual(proc.returncode, 0, proc.stdout + proc.stderr)
 		self.assertTrue(out.is_file())
 
-	def test_zip_directory_roundtrip(self):
+	def test_stream_directory_zip_roundtrip(self):
 		d = ROOT / "data" / "ziptest"
 		(d / "sub").mkdir(parents=True, exist_ok=True)
 		(d / "sub" / "f.txt").write_text("hello")
-		buf = zip_directory(d, "ROOTNAME")
+		buf = io.BytesIO(b"".join(stream_directory_zip(d, "ROOTNAME")))
 		self.assertEqual(zipfile.ZipFile(buf).read("ROOTNAME/sub/f.txt"), b"hello")
 
 	def test_error_summary_extracted_from_log(self):
@@ -770,9 +770,9 @@ class TestLibraries(Base):
 		log = jobs.job_log_path(job_id)
 		log.parent.mkdir(parents=True, exist_ok=True)
 		log.write_text("noise\nError in rule rgi_resistance:\n    jobid: 3\n    message: boom\n")
-		summary = frontend._extract_error_summary(log)
+		summary = frontend._pipeline_manager._extract_error_summary(log)
 		self.assertIn("Error in rule rgi_resistance", summary)
-		self.assertIsNone(frontend._extract_error_summary(Path("/nonexistent/x.log")))
+		self.assertIsNone(frontend._pipeline_manager._extract_error_summary(Path("/nonexistent/x.log")))
 
 	def test_health_endpoint_shape_without_network(self):
 		real = api_registry.check_endpoint

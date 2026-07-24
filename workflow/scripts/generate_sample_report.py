@@ -32,12 +32,24 @@ stylistic preference. The same fallback blocks external stylesheets, fonts and
 images, so everything here is one inline <style> and a system font stack.
 """
 
-import csv
-import json
 import re
 from pathlib import Path
 
-from rgi_json_to_csv import escape_html
+from report_format import (
+	MISSING,
+	empty,
+	escape_html,
+	float_or_none,
+	fraction_as_percent,
+	generic_table,
+	kv_table,
+	number,
+	percent,
+	seq_box,
+	support_bar,
+	table,
+)
+from report_io import read_csv_rows, read_json
 
 
 def _inputs_from_sample_dir(sample_dir, report_out=None):
@@ -116,44 +128,6 @@ colocation_calls_file = _paths["colocation_calls_file"]
 Path(report_file).parent.mkdir(parents=True, exist_ok=True)
 
 
-def _read_csv_rows(input_path):
-	"""Every row of a CSV, or [] if it isn't there. mefinder prefixes its call
-	table with #-comment lines (version/date banner), which csv would otherwise
-	hand back as one-column rows."""
-	if not input_path or not Path(input_path).exists():
-		return []
-	with open(input_path, newline="") as file_handle:
-		data_lines = [line for line in file_handle if not line.startswith("#")]
-	return list(csv.DictReader(data_lines))
-
-
-def _read_comment_banner(input_path):
-	"""mefinder prefixes its call table with a #-comment banner -- the sample, the
-	run date, and the mefinder/MGEdb/blastn versions. _read_csv_rows drops those
-	lines, but mefinder's own results page prints them above everything else, and
-	they are the only record of which MGEdb version made these calls."""
-	banner = {}
-	if not input_path or not Path(input_path).exists():
-		return banner
-	with open(input_path) as file_handle:
-		for line in file_handle:
-			if not line.startswith("#"):
-				break
-			label, _, value = line[1:].partition(":")
-			banner[label.strip()] = value.strip()
-	return banner
-
-
-def _read_json(input_path):
-	if not input_path or not Path(input_path).exists():
-		return {}
-	try:
-		with open(input_path) as file_handle:
-			return json.load(file_handle)
-	except (json.JSONDecodeError, OSError):
-		return {}
-
-
 def _rgi_sequence_index(input_path):
 	"""orf_id -> the predicted and CARD sequences RGI recorded for that hit.
 
@@ -177,130 +151,8 @@ def _rgi_sequence_index(input_path):
 			for item in node:
 				_walk(item)
 
-	_walk(_read_json(input_path))
+	_walk(read_json(input_path))
 	return index
-
-
-# A value the upstream output did not carry. Distinct from a zero: rendering a
-# missing identity as "0.0%" states that the aligner found no similarity, which
-# is a claim about the call rather than an admission that we do not have it.
-_MISSING = "—"
-
-
-def _number(value, decimals=0):
-	"""Thousands-separated, the way BV-BRC prints counts in its own report."""
-	if value is None or value == "":
-		return _MISSING
-	try:
-		return f"{float(value):,.{decimals}f}"
-	except (TypeError, ValueError):
-		return escape_html(value)
-
-
-def _percent(value, decimals=2):
-	if value is None or value == "":
-		return _MISSING
-	try:
-		return f"{float(value):.{decimals}f}%"
-	except (TypeError, ValueError):
-		return escape_html(value)
-
-
-def _fraction_as_percent(value, decimals=1):
-	"""mefinder reports identity and coverage as fractions (0.919), not percents."""
-	if value is None or value == "":
-		return _MISSING
-	try:
-		return f"{float(value) * 100:.{decimals}f}%"
-	except (TypeError, ValueError):
-		return escape_html(value)
-
-
-def _float_or_none(value):
-	try:
-		return round(float(value), 2)
-	except (TypeError, ValueError):
-		return None
-
-
-def _empty(message):
-	return f'<p class="empty">{escape_html(message)}</p>'
-
-
-def _table(headers, rows, caption=None, table_class=""):
-	"""One table. rows is a list of lists of already-escaped HTML cells."""
-	if not rows:
-		return _empty("No data available.")
-	parts = [f'<div class="scroll"><table class="{table_class}">']
-	if caption:
-		parts.append(f"<caption>{escape_html(caption)}</caption>")
-	parts.append("<thead><tr>")
-	parts.extend(f"<th>{escape_html(header)}</th>" for header in headers)
-	parts.append("</tr></thead><tbody>")
-	for row in rows:
-		parts.append("<tr>")
-		parts.extend(f"<td>{cell}</td>" for cell in row)
-		parts.append("</tr>")
-	parts.append("</tbody></table></div>")
-	return "".join(parts)
-
-
-def _generic_table(rows, caption=None):
-	"""Fallback for a CSV whose columns aren't the ones a panel expects -- a
-	result directory written by an older version of the pipeline, say. The panels
-	below name their columns deliberately (that is the point: they mirror the
-	service's own), but a name that isn't there must degrade to showing the data
-	as it stands, not to a column of "None" per field we hoped for.
-	"""
-	if not rows:
-		return _empty("No data available.")
-	headers = list(rows[0].keys())
-	return _table(
-		headers,
-		[[escape_html(row.get(header, "")) for header in headers] for row in rows],
-		caption=caption,
-	)
-
-
-def _meta_block(pairs):
-	"""mefinder's results page opens with a plain bold-labelled block rather than
-	a banded table: sample, date, tool and database version."""
-	rows = "".join(
-		f"<div><dt>{escape_html(label)}:</dt><dd>{value}</dd></div>"
-		for label, value in pairs
-		if value
-	)
-	return f"<dl class='meta'>{rows}</dl>" if rows else ""
-
-
-def _kv_table(pairs, caption=None):
-	"""BV-BRC's kv-table: bold key column, value column, no cell grid."""
-	if not pairs:
-		return _empty("No data available.")
-	parts = ['<div class="scroll"><table class="kv">']
-	if caption:
-		parts.append(f"<caption>{escape_html(caption)}</caption>")
-	parts.append("<tbody>")
-	for key, value in pairs:
-		parts.append(f'<tr><th scope="row">{escape_html(key)}</th><td>{value}</td></tr>')
-	parts.append("</tbody></table></div>")
-	return "".join(parts)
-
-
-def _support_bar(value):
-	"""PubMLST draws the Predicted-taxa support column as a filled bar, not a
-	bare number; mirror it so a 100% call reads at a glance the way it does on
-	the hosted rMLST results page."""
-	if value is None or value == "":
-		return _MISSING
-	try:
-		pct = max(0.0, min(100.0, float(value)))
-	except (TypeError, ValueError):
-		return escape_html(value)
-	return (
-		f'<span class="support-bar"><span class="support-fill" style="width:{pct:.0f}%"></span>'
-		f'<span class="support-label">{pct:.0f}%</span></span>'
-	)
 
 
 def _linked_data_values(linked_data):
@@ -313,7 +165,7 @@ def _linked_data_values(linked_data):
 	details=True (parse_mlst does). Absent or empty, the allele still matched;
 	the cell just has no distribution to show."""
 	if not linked_data:
-		return _MISSING
+		return MISSING
 	blocks = []
 	for database, database_fields in linked_data.items():
 		badge = f'<span class="linked-db">{escape_html(database)}</span>'
@@ -331,16 +183,16 @@ def _linked_data_values(linked_data):
 
 # --- data ---------------------------------------------------------------
 
-assembly_metrics = next(iter(_read_csv_rows(metrics_file)), {})
-mlst_result_data = _read_json(mlst_file)
-rmlst_raw = _read_json(rmlst_raw_file)
-rgi_hits = _read_csv_rows(rgi_file)
+assembly_metrics = next(iter(read_csv_rows(metrics_file)), {})
+mlst_result_data = read_json(mlst_file)
+rmlst_raw = read_json(rmlst_raw_file)
+rgi_hits = read_csv_rows(rgi_file)
 rgi_sequences = _rgi_sequence_index(rgi_json_file)
-blast_hits = _read_csv_rows(blast_file)
-mge_calls = _read_csv_rows(mge_calls_file)
-mef_summary_rows = _read_csv_rows(mobile_element_finder_file)
-colocation = _read_json(colocation_file)
-colocation_calls = _read_csv_rows(colocation_calls_file)
+blast_hits = read_csv_rows(blast_file)
+mge_calls = read_csv_rows(mge_calls_file)
+mef_summary_rows = read_csv_rows(mobile_element_finder_file)
+colocation = read_json(colocation_file)
+colocation_calls = read_csv_rows(colocation_calls_file)
 
 
 def _contig_token(contig_name):
@@ -406,8 +258,8 @@ def _novelty_index():
 		hit = dict(zip(columns, report_line.split("\t")))
 		key = (
 			hit.get("Gene"),
-			_float_or_none(hit.get("Identity_pct")),
-			_float_or_none(hit.get("Coverage_pct")),
+			float_or_none(hit.get("Identity_pct")),
+			float_or_none(hit.get("Coverage_pct")),
 		)
 		novelty_by_hit[key] = hit
 	return novelty_by_hit, preamble
@@ -420,8 +272,8 @@ def _novelty_for(rgi_hit):
 	return novelty_by_hit.get(
 		(
 			rgi_hit.get("best_hit_aro"),
-			_float_or_none(rgi_hit.get("percent_identity")),
-			_float_or_none(rgi_hit.get("percent_coverage")),
+			float_or_none(rgi_hit.get("percent_identity")),
+			float_or_none(rgi_hit.get("percent_coverage")),
 		),
 		{},
 	)
@@ -442,7 +294,7 @@ def _summary_panel():
 		support = mlst_result_data.get("species_support")
 		detail = f"MLST {escape_html(method)}"
 		if support is not None:
-			detail += f", {_percent(support, 1)} support"
+			detail += f", {percent(support, 1)} support"
 		rows.append(("Species", f"<em>{escape_html(species)}</em><br><small>{detail}</small>"))
 
 	if sequence_type:
@@ -470,11 +322,11 @@ def _summary_panel():
 		rows.append(
 			(
 				"Genome",
-				f"{_number(assembly_metrics.get('genome_length'))} bp in "
-				f"{_number(assembly_metrics.get('contigs'))} contigs<br>"
+				f"{number(assembly_metrics.get('genome_length'))} bp in "
+				f"{number(assembly_metrics.get('contigs'))} contigs<br>"
 				f"<small>BV-BRC "
-				f"GC {_percent(assembly_metrics.get('gc_content'))}, "
-				f"N50 {_number(assembly_metrics.get('n50'))}</small>",
+				f"GC {percent(assembly_metrics.get('gc_content'))}, "
+				f"N50 {number(assembly_metrics.get('n50'))}</small>",
 			)
 		)
 
@@ -515,35 +367,28 @@ def _summary_panel():
 		value = f"{linked_count} resistance gene(s) on or near a mobile element"
 		if linked_genes:
 			value += "<br><small>MEF " + escape_html(", ".join(linked_genes))
-			value += f" (within {_number(colocation.get('proximity_bp'))} bp)</small>"
+			value += f" (within {number(colocation.get('proximity_bp'))} bp)</small>"
 		rows.append(("Mobile-element linked", value))
 
 	if not rows:
-		return _empty("No data available.")
-	return _kv_table(rows)
+		return empty("No data available.")
+	return kv_table(rows)
 
 
 def _bvbrc_panel():
 	"""BV-BRC's own Table 1: kv-table, bold keys, thousands separators."""
 	if not assembly_metrics:
-		return _empty("No assembly metrics available.")
-	return _kv_table(
+		return empty("No assembly metrics available.")
+	return kv_table(
 		[
-			("Contigs", _number(assembly_metrics.get("contigs"))),
-			("GC Content", _percent(assembly_metrics.get("gc_content"))),
-			("Genome Length", f"{_number(assembly_metrics.get('genome_length'))} bp"),
-			("Contig N50", _number(assembly_metrics.get("n50"))),
-			("Contig L50", _number(assembly_metrics.get("l50"))),
+			("Contigs", number(assembly_metrics.get("contigs"))),
+			("GC Content", percent(assembly_metrics.get("gc_content"))),
+			("Genome Length", f"{number(assembly_metrics.get('genome_length'))} bp"),
+			("Contig N50", number(assembly_metrics.get("n50"))),
+			("Contig L50", number(assembly_metrics.get("l50"))),
 		],
 		caption="Table 1. Assembly Details",
 	)
-
-
-def _seq_box(sequence):
-	"""A long nucleotide/amino-acid string in a scrollable monospace box."""
-	if not sequence:
-		return _MISSING
-	return f'<div class="seqbox">{escape_html(sequence)}</div>'
 
 
 def _pairwise_alignment(hit, width=60):
@@ -587,38 +432,29 @@ def _card_panel():
 	protein (the ORF) beside the CARD database protein it matched, with the
 	percent identity between the two."""
 	if not rgi_hits:
-		return _empty("No resistance gene hits.")
+		return empty("No resistance gene hits.")
 	if "best_hit_aro" not in rgi_hits[0]:
-		return _generic_table(rgi_hits, caption=f"RGI hits ({len(rgi_hits)})")
+		return generic_table(rgi_hits, caption=f"RGI hits ({len(rgi_hits)})")
 
-	# What protein each numbered query is: Query N -> the CARD gene it matched.
-	legend_items = "".join(
-		f'<span class="query-item"><span class="allele">Query {index}</span> '
-		f'{escape_html(rgi_hit.get("best_hit_aro", "") or "?")}</span>'
-		for index, rgi_hit in enumerate(rgi_hits, start=1)
-	)
-	legend_html = (
-		'<p class="query-legend"><strong>Predicted proteins BLASTed against CARD '
-		f"({len(rgi_hits)} queries):</strong><br>{legend_items}</p>"
-	)
+	# What protein each numbered query is: Query N -> the CARD gene it matche
 
 	rows = []
 	for index, rgi_hit in enumerate(rgi_hits, start=1):
 		# Perfect / Strict / Loose are RGI's own detection paradigms.
 		rows.append(
 			[
-				f'<span class="allele">Query {index}</span>',
-				f'<span class="mono wrap">{escape_html(rgi_hit.get("orf_id", "") or _MISSING)}</span>',
+				f"<span>{index}</span>",
+				f'<span class="mono wrap">{escape_html(rgi_hit.get("orf_id", "") or MISSING)}</span>',
 				f"<strong>{escape_html(rgi_hit.get('best_hit_aro', ''))}</strong>",
 				f"<span>ARO:{escape_html(rgi_hit.get('aro_accession', ''))}</span>",
 				escape_html(rgi_hit.get("cut_off", "")),
-				_percent(rgi_hit.get("percent_identity")),
+				percent(rgi_hit.get("percent_identity")),
 				f'<span class="wrap">{escape_html(rgi_hit.get("drug_class", ""))}</span>',
 				escape_html(rgi_hit.get("resistance_mechanism", "")),
 				f'<span class="wrap">{escape_html(rgi_hit.get("amr_gene_family", ""))}</span>',
 			]
 		)
-	table_html = _table(
+	table_html = table(
 		[
 			"Query",
 			"ORF id",
@@ -649,38 +485,40 @@ def _card_panel():
 		card_dna = hit.get("dna_sequence_from_broadstreet") or ""
 		body = ""
 		if alignment:
-			body += "<h4>Protein alignment — predicted vs CARD</h4>" + alignment
+			body += "<h4>Protein alignment, predicted vs CARD</h4>" + alignment
 		if predicted_dna or card_dna:
 			body += (
 				'<div class="seq-grid">'
-				f"<div><h4>Predicted DNA ({len(predicted_dna):,} bp)</h4>{_seq_box(predicted_dna)}</div>"
-				f"<div><h4>CARD reference DNA ({len(card_dna):,} bp)</h4>{_seq_box(card_dna)}</div>"
+				f"<div><h4>Predicted DNA ({len(predicted_dna):,} bp)</h4>{seq_box(predicted_dna)}</div>"
+				f"<div><h4>CARD reference DNA ({len(card_dna):,} bp)</h4>{seq_box(card_dna)}</div>"
 				"</div>"
 			)
 		if not body:
 			continue
 		sequence_sections.append(
-			f'<details class="seq-details"><summary>Query {index} — '
-			f'{escape_html(rgi_hit.get("best_hit_aro", "") or "?")} '
+			f'<details class="seq-details"><summary>{index}: '
+			f"{escape_html(rgi_hit.get('best_hit_aro', '') or '?')} "
 			f'<span class="mono">{escape_html(rgi_hit.get("orf_id", ""))}</span></summary>'
 			f"{body}</details>"
 		)
 	sequences_html = ""
 	if sequence_sections:
 		sequences_html = (
-			'<h3 class="section-head">Query sequences — predicted vs CARD</h3>'
+			'<h3 class="section-head">Query sequences, predicted vs CARD</h3>'
 			+ "".join(sequence_sections)
 		)
 
-	return legend_html + table_html + sequences_html
+	return table_html + sequences_html
 
 
 def _blast_panel():
 	"""NCBI's result vocabulary: Description / Query Cover / Per. Ident / Accession."""
 	if not blast_hits:
-		return _empty("No BLAST hits.")
+		return empty("No BLAST hits.")
 	if "query_gene" not in blast_hits[0]:
-		return _generic_table(blast_hits, caption=f"BLAST hits ({len(blast_hits)})")
+		return generic_table(
+			blast_hits, caption=f"BLAST hits on proteins predicted by CARD ({len(blast_hits)})"
+		)
 	rows = []
 	for blast_hit in blast_hits:
 		is_novel = (blast_hit.get("is_novel", "") or "").lower() == "yes"
@@ -689,15 +527,15 @@ def _blast_panel():
 				f"<strong>{escape_html(blast_hit.get('query_gene', ''))}</strong>",
 				f'<span class="wrap">{escape_html(blast_hit.get("ncbi_top_hit", ""))}</span>',
 				f'<span class="mono">{escape_html(blast_hit.get("ncbi_accession", ""))}</span>',
-				_percent(blast_hit.get("ncbi_identity_pct")),
-				_percent(blast_hit.get("ncbi_coverage_pct")),
-				_percent(blast_hit.get("card_identity_pct")),
+				percent(blast_hit.get("ncbi_identity_pct")),
+				percent(blast_hit.get("ncbi_coverage_pct")),
+				percent(blast_hit.get("card_identity_pct")),
 				"novel" if is_novel else "known",
 				escape_html(blast_hit.get("source", "")),
 				escape_html(blast_hit.get("location", "")),
 			]
 		)
-	return _table(
+	return table(
 		[
 			"Query",
 			"Description",
@@ -719,14 +557,14 @@ def _mlst_panel():
 	locus match, laid out the way pubmlst.org/rmlst renders them -- a support bar
 	per taxon and a green "linked data values" badge per locus."""
 	if not mlst_result_data and not rmlst_raw:
-		return _empty("No MLST data available.")
+		return empty("No MLST data available.")
 
 	panels = []
 
 	profile = mlst_result_data.get("alleles") or []
 	profile_html = ", ".join(f"<span>{escape_html(a)}</span>" for a in profile)
 	panels.append(
-		_kv_table(
+		kv_table(
 			[
 				("Scheme", escape_html(mlst_result_data.get("scheme", "N/A"))),
 				("ST", f"<strong>{escape_html(mlst_result_data.get('st', 'N/A'))}</strong>"),
@@ -740,7 +578,7 @@ def _mlst_panel():
 	# when PubMLST was unreachable -- in which case mlst_results.json fell back
 	# to the scheme label and there is no rST to show.
 	if rmlst_raw.get("error"):
-		panels.append(_empty(f"rMLST species ID unavailable: {rmlst_raw['error']}"))
+		panels.append(empty(f"rMLST species ID unavailable: {rmlst_raw['error']}"))
 		return "".join(panels)
 
 	fields = rmlst_raw.get("fields") or {}
@@ -753,14 +591,14 @@ def _mlst_panel():
 			[
 				escape_html(str(taxon.get("rank", "")).upper()),
 				f"<em>{escape_html(taxon.get('taxon', ''))}</em>",
-				_support_bar(taxon.get("support")),
+				support_bar(taxon.get("support")),
 				f'<span class="wrap lineage">{escape_html(taxon.get("taxonomy", ""))}</span>',
 			]
 		)
 	if taxon_rows:
 		panels.append('<h3 class="pubmlst-head">Predicted taxa</h3>')
 		panels.append(
-			_table(
+			table(
 				["Rank", "Taxon", "Support", "Taxonomy"],
 				taxon_rows,
 				table_class="predicted-taxa",
@@ -789,17 +627,17 @@ def _mlst_panel():
 				[
 					escape_html(locus),
 					escape_html(match.get("allele_id", "")),
-					_number(match.get("length")),
+					number(match.get("length")),
 					f'<span class="wrap mono">{escape_html(match.get("contig", ""))}</span>',
-					_number(match.get("start")),
-					_number(match.get("end")),
+					number(match.get("start")),
+					number(match.get("end")),
 					_linked_data_values(match.get("linked_data")),
 					escape_html(match.get("flag", "") or ""),
 				]
 			)
 	if match_rows:
 		panels.append(
-			_table(
+			table(
 				[
 					"Locus",
 					"Allele",
@@ -826,18 +664,6 @@ def _mef_panel():
 	web service is looking at."""
 	panels = []
 
-	banner = _read_comment_banner(mge_calls_file)
-	panels.append(
-		_meta_block(
-			[
-				("Sample name", escape_html(banner.get("sample", ""))),
-				("Date", escape_html(banner.get("date", ""))),
-				("MGEfinder version", escape_html(banner.get("mge_finder version", ""))),
-				("MGEdb version", escape_html(banner.get("mgedb version", ""))),
-			]
-		)
-	)
-
 	# mefinder writes the whole FASTA defline into `contig`
 	# ("assembly_contig_2 length 713330 coverage 135.2 normalized_cov 1.05"),
 	# which is exactly what its results page uses as each section's heading. Key
@@ -854,7 +680,7 @@ def _mef_panel():
 	resistance_by_contig = _resistance_by_contig()
 
 	if not mge_calls and not resistance_by_contig:
-		panels.append(_empty("No mobile genetic elements detected."))
+		panels.append(empty("No mobile genetic elements detected."))
 		return "".join(panels)
 
 	# The union, not just the contigs carrying an element: mefinder's own
@@ -904,18 +730,18 @@ def _mef_panel():
 					f"{escape_html(', '.join(sorted(resistance['on_mge'])))}</small>"
 				)
 		else:
-			resistance_cell = _MISSING
+			resistance_cell = MISSING
 		overview_rows.append(
 			[
 				contig_cell,
-				_number(len(calls)),
+				number(len(calls)),
 				escape_html(", ".join(sorted({call.get("name", "") for call in calls})))
-				or _MISSING,
+				or MISSING,
 				resistance_cell,
 			]
 		)
 	panels.append(
-		_table(
+		table(
 			["Contig", "#MGEs", "Mobile elements", "Resistance (CARD)"],
 			overview_rows,
 			table_class="greyhead",
@@ -924,12 +750,6 @@ def _mef_panel():
 	# The Resistance column is a CARD/RGI join done here by contig, not a field
 	# mefinder reported: MobileElementFinder 1.1.2 has no --resistance flag. Say
 	# so, or the column reads as something the tool called.
-	panels.append(
-		'<p class="note">The <strong>Resistance (CARD)</strong> column joins RGI '
-		"hits to each contig here -- MobileElementFinder 1.1.2 has no "
-		"<code>--resistance</code> flag and does not report resistance itself. "
-		"Genes marked <em>on MGE</em> overlap a called element.</p>"
-	)
 
 	for index, contig in enumerate(c for c in contigs_in_order if c in calls_by_contig):
 		calls = calls_by_contig[contig]
@@ -942,17 +762,17 @@ def _mef_panel():
 					f"<strong>{escape_html(mge_call.get('name', ''))}</strong>",
 					escape_html(mge_call.get("type", "")),
 					escape_html(mge_call.get("prediction", "")),
-					_fraction_as_percent(mge_call.get("identity")),
-					_fraction_as_percent(mge_call.get("coverage")),
-					f"{_number(template_length)} bp" if template_length else _MISSING,
-					f'<span class="mono">{_number(mge_call.get("start"))}-'
-					f"{_number(mge_call.get('end'))}</span>",
+					fraction_as_percent(mge_call.get("identity")),
+					fraction_as_percent(mge_call.get("coverage")),
+					f"{number(template_length)} bp" if template_length else MISSING,
+					f'<span class="mono">{number(mge_call.get("start"))}-'
+					f"{number(mge_call.get('end'))}</span>",
 				]
 			)
 		panels.append(
 			f'<h3 class="contig" id="contig-{index}">Contig: {escape_html(contig_defline)}</h3>'
 			"<h4>Mobile element results</h4>"
-			+ _table(
+			+ table(
 				[
 					"Mge name",
 					"Type",
@@ -970,12 +790,12 @@ def _mef_panel():
 	if colocation:
 		linked_genes = colocation.get("mobile_element_linked_genes") or []
 		panels.append(
-			_kv_table(
+			kv_table(
 				[
-					("MGEs detected", _number(colocation.get("mges_detected"))),
-					("Resistance genes total", _number(colocation.get("resistance_genes_total"))),
-					("Resistance genes on MGE", _number(colocation.get("resistance_genes_on_mge"))),
-					("Proximity window", f"{_number(colocation.get('proximity_bp'))} bp"),
+					("MGEs detected", number(colocation.get("mges_detected"))),
+					("Resistance genes total", number(colocation.get("resistance_genes_total"))),
+					("Resistance genes on MGE", number(colocation.get("resistance_genes_on_mge"))),
+					("Proximity window", f"{number(colocation.get('proximity_bp'))} bp"),
 					(
 						"Linked genes",
 						" ".join(
@@ -1021,7 +841,7 @@ html_content = f"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{escape_html(sample_id)} — Sample Report</title>
+<title>{escape_html(sample_id)}: Sample Report</title>
 <style>
 :root {{ --accent: #334155; --line: #ccc; --muted: #777; }}
 * {{ box-sizing: border-box; }}

@@ -1,13 +1,12 @@
+# Direct dependencies only. pandas, biopython, pyyaml, click and tqdm were
+# listed here but imported nowhere -- snakemake pulls in the ones it needs
+# itself, and re-declaring them made this file look like a record of what the
+# code uses when it was not one.
 snakemake>=7.32.4
-pandas>=2.0
-numpy>=1.24
+numpy>=1.24          # workflow/helpers/run_estimate_net.py
 requests>=2.31
-biopython>=1.81
 flask>=3.0
 flask-limiter>=3.5
 gunicorn>=21.0
-openpyxl>=3.1
-pyyaml>=6.0
-click>=8.1
-tqdm>=4.65
+openpyxl>=3.1        # reads the sequencing company's checksum workbook
 boto3>=1.34

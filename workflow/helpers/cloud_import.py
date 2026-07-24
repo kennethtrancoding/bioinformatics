@@ -448,10 +448,6 @@ def _onedrive_list(share_url):
 # Download
 
 
-def _is_stats_workbook(file_name):
-	return file_name.lower().endswith(".xlsx") and not file_name.startswith("~$")
-
-
 def _accept_name(file_name):
 	"""(safe_name, None) for a file worth downloading, else (None, reason).
 
@@ -461,7 +457,10 @@ def _accept_name(file_name):
 	safe_name = secure_filename(file_name or "")
 	if not safe_name:
 		return None, f"Skipped a file whose name cannot be used ({file_name!r})."
-	if import_samples.is_fastq(safe_name) or _is_stats_workbook(safe_name):
+	# ...or the sequencing company's stats workbook ("~$" is an Excel lock file).
+	if import_samples.is_fastq(safe_name) or (
+		safe_name.lower().endswith(".xlsx") and not safe_name.startswith("~$")
+	):
 		return safe_name, None
 	return None, f"Skipped {safe_name}: not a FASTQ file or a sequencing stats workbook."
 

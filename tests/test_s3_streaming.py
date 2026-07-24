@@ -17,6 +17,8 @@ import sys
 import unittest
 from unittest import mock
 
+from botocore.exceptions import ClientError
+
 import frontend  # noqa: E402
 from tests._isolation import REAL_ROOT  # noqa: F401  (must import first)
 from tests.test_batching import _REAL_POPEN, Base, token_for  # noqa: F401,E402
@@ -75,6 +77,21 @@ class FakeS3:
 
 	def put_object_tagging(self, Bucket=None, Key=None, Tagging=None):
 		self.tags[Key] = {tag["Key"]: tag["Value"] for tag in Tagging["TagSet"]}
+
+	def head_object(self, Bucket=None, Key=None):
+		"""Exists/does not exist, answered the way boto does it.
+
+		s3_storage.object_exists reads a missing object off the *exception*, not
+		off a return value, so a fake that returned None for an absent key would
+		report every object as present. Admission asks this question before every
+		run (pipeline_manager._check_missing_files): with the reads released from
+		local disk, S3 is the only place left to find them, so a fake that always
+		said yes would let a run start on reads that are not anywhere."""
+		if Key not in self.objects:
+			raise ClientError(
+				{"Error": {"Code": "404", "Message": "Not Found"}}, "HeadObject"
+			)
+		return {"ContentLength": len(self.objects[Key]), "ETag": '"fake"'}
 
 	def get_paginator(self, _operation):
 		return _FakePaginator(self.objects)
@@ -235,6 +252,23 @@ class TestReadsComeBackForTheRun(S3Base):
 				"ABCDEFGHJKMN", "nope.fastq.gz", jobs.job_data_dir("ABCDEFGHJKMN") / "nope.fastq.gz"
 			)
 
+	def test_a_run_is_refused_when_a_read_is_in_neither_place(self):
+		"""Admission asks S3 whether the released reads are still there, and has to
+		believe a no. The upload deletes the local copy once S3 confirms it, so with
+		the object gone the read is nowhere -- and a run admitted on it dies an hour
+		later inside raw.smk, having already frozen the job's samples. Refusing here
+		is a 409 the user can act on; the alternative is a crash they cannot."""
+		job_id = self.submit_pair("VANISHED").get_json()["job_id"]
+		token_for(job_id)
+		self.assertFalse((jobs.job_data_dir(job_id) / "VANISHED_R1_001.fastq.gz").exists())
+
+		self.s3.objects.pop(s3_storage.raw_key_for(job_id, "VANISHED_R1_001.fastq.gz"))
+
+		response = self.client.post("/run", data={"job_id": job_id})
+		self.assertEqual(response.status_code, 409)
+		self.assertIn("upload still in progress", response.get_json()["error"].lower())
+		self.assertEqual(frontend._pipeline_manager.processes, {})
+
 
 class TestWithoutABucketTheLocalCopyIsTheOnlyCopy(Base):
 	"""No S3 configured -- local dev, and the default in these tests. Nothing may be
@@ -325,10 +359,10 @@ class TestTheExpiryClockNeverEatsReadsAJobNeeds(S3Base):
 			self.assertEqual(self.s3.raw_states()[key], "unrun")
 
 	def _kill_running(self):
-		for pipeline_process in list(frontend._pipeline_processes.values()):
+		for pipeline_process in list(frontend._pipeline_manager.processes.values()):
 			pipeline_process.kill()
-		frontend._pipeline_processes.clear()
-		frontend._pipeline_queue.clear()
+		frontend._pipeline_manager.processes.clear()
+		frontend._pipeline_manager.queue.clear()
 		frontend.subprocess.Popen = _REAL_POPEN
 
 

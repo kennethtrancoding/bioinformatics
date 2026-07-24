@@ -1,19 +1,21 @@
 """
-Utility functions for the bioinformatics workflow.
-Handles logging, retries, file operations, and common helpers.
+Cross-cutting helpers for the bioinformatics workflow: logging, retries,
+checksums, and streaming archives.
+
+Everything here is used by more than one caller. Single-use helpers belong with
+their caller, and anything that only reads or writes job state belongs in
+job_store.py, whose writes are atomic.
 """
 
-import sys
-import io
-import logging
-import hashlib
-import re
-import time
 import functools
+import hashlib
+import logging
+import re
+import sys
+import time
 import zipfile
 from pathlib import Path
-from typing import Any, Callable, Optional
-import json
+from typing import Callable, Optional
 
 
 # Logging Setup
@@ -135,89 +137,7 @@ def compute_md5(file_path: str, chunk_size: int = 8192) -> str:
     return md5_hash.hexdigest()
 
 
-def verify_md5(file_path: str, expected_md5: str) -> bool:
-    """
-    Verify file MD5 checksum against expected value.
-
-    Args:
-        file_path: Path to file
-        expected_md5: Expected MD5 hexdigest
-
-    Returns:
-        True if checksums match, False otherwise
-    """
-    computed = compute_md5(file_path)
-    return computed.lower() == expected_md5.lower()
-
-
-def ensure_dir(file_path_value: str) -> str:
-    """
-    Ensure directory exists and return path.
-
-    Args:
-        path: Directory path
-
-    Returns:
-        Absolute path to directory
-    """
-    json_path = Path(file_path_value)
-    json_path.mkdir(parents=True, exist_ok=True)
-    return str(json_path.resolve())
-
-
-def safe_symlink(source_path: str, dst: str, logger=None) -> bool:
-    """
-    Safely create symbolic link, removing existing link if needed.
-
-    Args:
-        src: Source path
-        dst: Destination link path
-        logger: Optional logger instance
-
-    Returns:
-        True if successful, False otherwise
-    """
-    dst_path = Path(dst)
-    try:
-        if dst_path.is_symlink():
-            dst_path.unlink()
-        elif dst_path.exists():
-            if logger:
-                logger.warning(f"Destination {dst} exists but is not a symlink. Skipping.")
-            return False
-
-        dst_path.symlink_to(source_path)
-        if logger:
-            logger.info(f"Created symlink: {dst} -> {source_path}")
-        return True
-    except Exception as exception:
-        if logger:
-            logger.error(f"Failed to create symlink: {exception}")
-        return False
-
-
 # Archiving
-
-def zip_directory(directory: str, arc_root: str) -> io.BytesIO:
-    """
-    Zip a directory's files into an in-memory buffer.
-
-    Args:
-        directory: Directory to zip
-        arc_root: Path prefix given to each file's entry inside the archive
-
-    Returns:
-        BytesIO of the zip data, seeked to the start
-    """
-    buffer = io.BytesIO()
-    directory = Path(directory)
-    with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as archive:
-        for file_path in directory.rglob('*'):
-            if file_path.is_file():
-                archive.write(file_path, Path(arc_root) / file_path.relative_to(directory))
-    buffer.seek(0)
-    return buffer
-
 
 class _ChunkSink:
     """Write target for ZipFile that hands each compressed chunk to the caller
@@ -248,11 +168,12 @@ def stream_directory_zip(directory: str, arc_root: str, chunk_size: int = 1 << 2
     """
     Zip a directory's files, yielding the archive in pieces as it is built.
 
-    zip_directory's peak memory is the whole finished archive. That is survivable
-    for one isolate and fatal for a whole job, where the archive is every isolate
-    at once -- large enough to get the (single) web worker OOM-killed, which takes
-    the site down and fails whatever runs were in flight. Here memory stays bounded
-    by chunk_size no matter how large the job is.
+    Buffering a finished archive in memory is survivable for one isolate and fatal
+    for a whole job, where the archive is every isolate at once -- large enough to
+    get the (single) web worker OOM-killed, which takes the site down and fails
+    whatever runs were in flight. Here memory stays bounded by chunk_size no matter
+    how large the job is. This is the only archiver: the download routes stream it
+    straight to the client, and s3_storage spools it to a temp file.
 
     Args:
         directory: Directory to zip
@@ -284,99 +205,3 @@ def stream_directory_zip(directory: str, arc_root: str, chunk_size: int = 1 << 2
     yield from sink.drain()
 
 
-# Data Parsing
-
-def load_json_safe(file_path: str, logger=None) -> dict:
-    """
-    Safely load JSON file with error handling.
-
-    Args:
-        file_path: Path to JSON file
-        logger: Optional logger instance
-
-    Returns:
-        Parsed JSON dict, or empty dict if error
-    """
-    try:
-        with Path(file_path).open('r') as file_handle:
-            return json.load(file_handle)
-    except FileNotFoundError:
-        if logger:
-            logger.error(f"JSON file not found: {file_path}")
-        return {}
-    except json.JSONDecodeError as exception:
-        if logger:
-            logger.error(f"Failed to parse JSON file {file_path}: {exception}")
-        return {}
-
-
-def save_json(json_data: dict, file_path: str, logger=None) -> bool:
-    """
-    Save dictionary to JSON file with error handling.
-
-    Args:
-        data: Dictionary to save
-        file_path: Output file path
-        logger: Optional logger instance
-
-    Returns:
-        True if successful, False otherwise
-    """
-    try:
-        json_path = Path(file_path)
-        (json_path.parent if json_path.parent != Path("") else Path(".")).mkdir(parents=True, exist_ok=True)
-        with json_path.open('w') as file_handle:
-            json.dump(json_data, file_handle, indent=2)
-        if logger:
-            logger.info(f"Saved JSON to {file_path}")
-        return True
-    except Exception as exception:
-        if logger:
-            logger.error(f"Failed to save JSON to {file_path}: {exception}")
-        return False
-
-
-# Polling / Async Helpers
-
-def wait_for_condition(
-    condition_fn: Callable,
-    max_wait_seconds: int = 600,
-    poll_interval: int = 10,
-    logger=None
-) -> bool:
-    """
-    Poll a condition function until True or timeout.
-
-    Args:
-        condition_fn: Function that returns True when condition met
-        max_wait_seconds: Maximum time to wait
-        poll_interval: Seconds between polls
-        logger: Optional logger instance
-
-    Returns:
-        True if condition met, False if timeout
-    """
-    start_time = time.time()
-
-    while True:
-        elapsed = time.time() - start_time
-
-        if elapsed > max_wait_seconds:
-            if logger:
-                logger.warning(f"Condition not met after {max_wait_seconds}s")
-            return False
-
-        if condition_fn():
-            if logger:
-                logger.info(f"Condition met after {elapsed:.1f}s")
-            return True
-
-        if logger:
-            logger.debug(f"Waiting... ({elapsed:.1f}s / {max_wait_seconds}s)")
-
-        time.sleep(poll_interval)
-
-
-if __name__ == "__main__":
-    logger = setup_logger("utils_test", log_file="logs/utils_test.log")
-    logger.info("Logging setup successful")

@@ -14,7 +14,7 @@ three sequential rounds of waiting.
 So they declare `cpu=0` (they compute nothing) and `bvbrc=1` (they are one of the
 jobs this run is allowed to have in flight at BV-BRC). The bvbrc pool, not the core
 count, is what decides how many samples assemble at once -- see
-BVBRC_MAX_IN_FLIGHT in workflow/lib/pipeline_manager.py.
+BVBRC_MAX_IN_FLIGHT in workflow/helpers/pipeline_manager.py.
 
 The upload is the exception, and is bounded on purpose. It is the one BV-BRC rule
 that touches a local FASTQ, and a FASTQ on disk is the scarce thing (see

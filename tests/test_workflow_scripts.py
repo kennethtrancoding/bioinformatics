@@ -348,10 +348,12 @@ class TestAnalysisChain(unittest.TestCase):
         self.assertNotIn("<td>0.0%</td>", html, "missing identity rendered as a real 0%")
         self.assertIn("<td>—</td>", html, "missing values should render as an em-dash")
         # The MEF tab's Resistance column is a CARD/RGI join, not mefinder
-        # output (mefinder 1.1.2 has no --resistance flag). It must say so, or
-        # it reads as something the tool reported.
+        # output (mefinder 1.1.2 has no --resistance flag), so the column has to
+        # carry its source or it reads as something the tool reported. The
+        # attribution is the header itself -- the standalone note paragraph that
+        # used to sit under the table is gone, and the header is what survives
+        # being read at a glance.
         self.assertIn("Resistance (CARD)", html, "resistance column is not attributed to CARD")
-        self.assertIn("--resistance", html, "the provenance note is missing")
         self.assertIn("on MGE", html, "blaCTX-M-15 overlaps IS26 and should be flagged on-MGE")
 
     def test_09_generate_master_report(self):

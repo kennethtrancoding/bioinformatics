@@ -23,7 +23,7 @@ cannot describe both.
 AND THEY OVERLAP
 
 The two stages are charged to different pools (cpu and bvbrc, see
-lib/pipeline_manager.py), so they do not queue behind each other: while round k+1
+workflow/helpers/pipeline_manager.py), so they do not queue behind each other: while round k+1
 is assembling at BV-BRC, round k's samples are already going through RGI here. The
 model used to *add* the stages, which quoted every run as if the box sat idle
 through every assembly and BV-BRC sat idle through every RGI. On a 48-sample batch
@@ -57,7 +57,7 @@ very different claims:
                   so that one BV-BRC outage that stretched a run to six hours does
                   not poison every estimate after it. One number for every run,
                   whatever its shape.
-  enough history  a small network (lib/run_estimate_net.py) that predicts the ratio
+  enough history  a small network (workflow/helpers/run_estimate_net.py) that predicts the ratio
                   from the run's shape, so that a 1-sample cold run and a 40-sample
                   re-run can be wrong in different directions rather than sharing one
                   average. It trains on the same ratios, its output is clamped, and
@@ -307,7 +307,7 @@ def calibration():
 
 	The flat answer: one number for every run, whatever its shape. It is what the
 	estimate uses until there is enough history to fit the network that replaces
-	it (see ``correction_for`` and lib/run_estimate_net.py), and what it falls
+	it (see ``correction_for`` and workflow/helpers/run_estimate_net.py), and what it falls
 	back to if that fit is ever unavailable."""
 	history = _read_history()
 	if not history:
