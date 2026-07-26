@@ -51,6 +51,23 @@
 #
 # The build happens *during* the drain, not after it, so the wait is mostly free:
 # the conda solve is slow, and in-flight runs use that time to finish.
+#
+# WHY IT CHECKS WHAT IT ACTUALLY STARTED:
+#
+# Everything above is about the restart being safe. None of it establishes that the
+# restart changed anything. This script used to build, tag :latest, restart, and log
+# "done" -- and on 2026-07-24 it did exactly that while systemd brought the PREVIOUS
+# image back up: the build succeeded and reported `Successfully tagged`, but the tag
+# was still on the old image afterwards and the new one was left dangling. Every
+# signal the script had said success. The databases were untouched, the code was
+# unchanged, and nothing said so.
+#
+# A tag is a name that something else can move; the image ID is the artifact. So the
+# build now records the ID it produced and the script compares it against what the
+# service is actually running, refusing to report success on a mismatch. On the
+# weekly timer that difference matters more than it does by hand -- an unattended
+# refresh that quietly does nothing looks identical to one that worked, week after
+# week, until someone notices CARD is months stale.
 
 set -euo pipefail
 
@@ -66,6 +83,28 @@ DRAIN_FLAG="/app/config/jobs/.drain"
 # A run deep in a BV-BRC assembly can legitimately take hours. Past this, skip.
 DRAIN_TIMEOUT_SECONDS="${DRAIN_TIMEOUT_SECONDS:-14400}"  # 4h
 DRAIN_POLL_SECONDS="${DRAIN_POLL_SECONDS:-60}"
+
+# How long to give systemd to get the new container up before concluding the
+# restart did not take. ExecStartPre removes the old container first, so the
+# name is briefly absent; this covers that gap, not the app's own boot.
+RESTART_TIMEOUT_SECONDS="${RESTART_TIMEOUT_SECONDS:-120}"
+
+# Where `docker build` records the ID of the image it produced. Written by the
+# build itself rather than read back from the tag afterwards -- reading the tag
+# would ask the very thing under suspicion whether it is correct.
+IID_FILE="$(mktemp)"
+
+# One EXIT handler for both jobs. The drain half is conditional because it must
+# fire on every failure path *except* a completed restart, after which the booted
+# container has already cleared the flag itself.
+LIFT_DRAIN_ON_EXIT=0
+cleanup() {
+	if [ "$LIFT_DRAIN_ON_EXIT" = "1" ]; then
+		undrain
+	fi
+	rm -f "$IID_FILE"
+}
+trap cleanup EXIT
 
 log() { echo "[$(date -u +%FT%TZ)] $*"; }
 
@@ -94,12 +133,61 @@ undrain() {
 	docker exec "$CONTAINER" rm -f "$DRAIN_FLAG" >/dev/null 2>&1 || true
 }
 
+# Build, and leave the ID of what was built in $IID_FILE for verify_restart.
+build_image() {
+	docker build --iidfile "$IID_FILE" -t "$IMAGE_TAG" .
+}
+
+# Refuse to call a restart a deploy until the service is running the image this
+# run built. Compares IDs, not tags: a tag is a name something else can move, and
+# when one failed to move the restart silently served the previous image while
+# every other signal reported success.
+verify_restart() {
+	local expected actual deadline
+	expected="$(cat "$IID_FILE" 2>/dev/null || true)"
+	expected="${expected#sha256:}"
+	if [ -z "$expected" ]; then
+		log "VERIFICATION IMPOSSIBLE: the build recorded no image ID; refusing to report success."
+		return 1
+	fi
+
+	# ExecStartPre removes the old container before ExecStart creates the new one,
+	# so the name is briefly absent. Absent is "not yet", never "wrong".
+	deadline=$(( $(date +%s) + RESTART_TIMEOUT_SECONDS ))
+	while :; do
+		actual="$(docker inspect -f '{{.Image}}' "$CONTAINER" 2>/dev/null || true)"
+		actual="${actual#sha256:}"
+		if [ -n "$actual" ] && container_is_running; then
+			break
+		fi
+		if [ "$(date +%s)" -ge "$deadline" ]; then
+			log "VERIFICATION FAILED: '$CONTAINER' did not come up within ${RESTART_TIMEOUT_SECONDS}s."
+			log "  check: sudo systemctl status $SERVICE; docker logs $CONTAINER"
+			return 1
+		fi
+		sleep 2
+	done
+
+	if [ "$actual" = "$expected" ]; then
+		log "verified: running the image this build produced (${expected:0:12})."
+		return 0
+	fi
+
+	log "VERIFICATION FAILED: built ${expected:0:12} but '$CONTAINER' is running ${actual:0:12}."
+	log "The build succeeded and the restart succeeded, but '$IMAGE_TAG' did not end up"
+	log "on the new image -- so systemd started the previous one. The databases and code"
+	log "are UNCHANGED. The built image is intact; point the tag at it and restart:"
+	log "  docker tag ${expected:0:12} $IMAGE_TAG && sudo systemctl restart $SERVICE"
+	return 1
+}
+
 if ! container_is_running; then
 	# Nothing to drain and nothing to kill: just refresh and let systemd bring it up.
 	log "container '$CONTAINER' is not running; rebuilding without a drain."
-	docker build -t "$IMAGE_TAG" .
+	build_image
 	log "restarting service onto the new image..."
 	sudo systemctl restart "$SERVICE"
+	verify_restart
 	log "done."
 	exit 0
 fi
@@ -108,10 +196,10 @@ log "entering drain mode: new runs will queue instead of starting."
 docker exec "$CONTAINER" touch "$DRAIN_FLAG"
 # From here on, any exit that is not a successful restart has to lift the drain,
 # or the app would queue runs forever and never start them.
-trap 'undrain' EXIT
+LIFT_DRAIN_ON_EXIT=1
 
 log "rebuilding image to refresh CARD/MGEdb (in-flight runs continue during the build)..."
-docker build -t "$IMAGE_TAG" .
+build_image
 
 log "waiting for in-flight runs and uploads to finish (timeout ${DRAIN_TIMEOUT_SECONDS}s)..."
 deadline=$(( $(date +%s) + DRAIN_TIMEOUT_SECONDS ))
@@ -143,8 +231,15 @@ done
 
 log "restarting service onto the new image..."
 # The new container clears the drain flag on boot and starts whatever queued up
-# while we were draining (see _reconcile_interrupted_runs in frontend.py).
-trap - EXIT
+# while we were draining (see _reconcile_interrupted_runs in frontend.py) -- and
+# so does the old one if the restart brings that back instead, which is why this
+# is safe to drop even on the path where verification below fails.
+LIFT_DRAIN_ON_EXIT=0
 sudo systemctl restart "$SERVICE"
+
+# Non-zero from here marks the systemd unit failed, which is what puts an
+# unattended weekly refresh that achieved nothing into `systemctl status` and the
+# journal instead of leaving it looking like every successful week.
+verify_restart
 
 log "done."
