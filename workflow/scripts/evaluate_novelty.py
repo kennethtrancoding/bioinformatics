@@ -9,6 +9,7 @@ from pathlib import Path
 from rgi_json import (
 	TAB_COVERAGE_COLUMN,
 	extract_aro_category,
+	iter_best_hits,
 	load_tab_report,
 	tab_row_for_hit,
 )
@@ -29,23 +30,14 @@ with open(rgi_file, "r") as file_handle:
 # reported with an "unknown" antibiotic.
 tab_index = load_tab_report(rgi_file)
 
-# CARD RGI writes a flat dict keyed by ORF id; each ORF maps to one or more
-# HSP hit dicts ({ORF: {hsp_key: {...hit...}}}). Flatten to a list of hits.
-# Also support a top-level 'results'/'card_call_results' list from other RGI
-# versions, or a plain list.
-if isinstance(rgi_data, dict) and (rgi_data.get("results") or rgi_data.get("card_call_results")):
-	novelty_results = rgi_data.get("results") or rgi_data.get("card_call_results")
-elif isinstance(rgi_data, dict):
-	novelty_results = []
-	for orf_result_value in rgi_data.values():
-		if isinstance(orf_result_value, dict):
-			for high_scoring_pair in orf_result_value.values():
-				if isinstance(high_scoring_pair, dict):
-					novelty_results.append(high_scoring_pair)
-elif isinstance(rgi_data, list):
-	novelty_results = rgi_data
-else:
-	novelty_results = []
+# One hit per ORF, not one per CARD model. RGI keys each ORF to every reference
+# model that passed the cutoff for it, so flattening them all judged the same
+# gene once per allelic variant in the database -- an isolate with one AmpC came
+# back with ~220 candidate novel variants of it, each with its own identity and
+# coverage. iter_best_hits keeps the model RGI itself reports as Best_Hit_ARO,
+# and walks whichever shape the JSON is in: ORF -> model, a top-level
+# 'results'/'card_call_results' list from other RGI versions, or a plain list.
+novelty_results = [hit for _orf_id, hit, _contig in iter_best_hits(rgi_data)]
 
 novelty_items = []
 summary = {
