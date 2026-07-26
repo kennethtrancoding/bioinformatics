@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from report_io import write_csv
-from rgi_json import TAB_COVERAGE_COLUMN, extract_aro_category, iter_hits, load_tab_report, tab_row_for_hit
+from rgi_json import TAB_COVERAGE_COLUMN, extract_aro_category, iter_best_hits, load_tab_report, tab_row_for_hit
 
 # Columns written to the CSV, in order.
 FIELDS = [
@@ -77,7 +77,7 @@ def main():
 	tab_index = load_tab_report(input_json)
 	output_rows = [
 		_hit_to_row(orf_id, hit, contig, tab_index)
-		for orf_id, hit, contig in iter_hits(rgi_data)
+		for orf_id, hit, contig in iter_best_hits(rgi_data)
 	]
 
 	write_csv(output_csv, FIELDS, output_rows)

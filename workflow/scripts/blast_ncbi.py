@@ -48,7 +48,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from report_io import write_csv as _write_csv  # noqa: E402
-from rgi_json import aro_category_names, iter_hits  # noqa: E402
+from rgi_json import aro_category_names, iter_best_hits  # noqa: E402
 
 # outfmt 6 columns we request from blastp. Rich set so the saved full output
 # keeps alignment stats, taxonomy and the subject title (organism + plasmid/
@@ -82,7 +82,7 @@ def select_queries(rgi_data, mechanism, max_queries):
 	Returns a list of dicts with sequence + metadata."""
 	mechanism_filter_lower = (mechanism or "").lower()
 	selected, seen = [], set()
-	for orf_id, hit, contig in iter_hits(rgi_data):
+	for orf_id, hit, contig in iter_best_hits(rgi_data):
 		protein_sequence = hit.get("orf_prot_sequence") or hit.get("query")
 		if not protein_sequence:
 			continue

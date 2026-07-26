@@ -55,15 +55,17 @@ def run_script(name, **kw):
 CONTIG = "assembly_contig_1"
 
 
-def rgi_hit(aro, model, identity, start, end, mechanism, family, drug):
+def rgi_hit(aro, model, identity, start, end, mechanism, family, drug, bit_score=500.0):
     """Shaped like a real `rgi main` JSON hit: no coverage figure anywhere, and
-    the drug class reachable only through ARO_category."""
+    the drug class reachable only through ARO_category. ``bit_score`` is what RGI
+    ranks an ORF's competing models by to pick Best_Hit_ARO."""
     return {
         "ARO_name": aro,
         "model_name": model,
         "ARO_accession": "3001876",
         "type_match": "Strict",
         "perc_identity": identity,
+        "bit_score": bit_score,
         "orf_from": CONTIG,
         "orf_start": start,
         "orf_end": end,
@@ -75,6 +77,17 @@ def rgi_hit(aro, model, identity, start, end, mechanism, family, drug):
             "3": {"category_aro_class_name": "AMR Gene Family", "category_aro_name": family},
         },
     }
+
+
+def prodigal_orf(index, start, end):
+    """An RGI JSON top-level key: the Prodigal header of the ORF, not a contig."""
+    return f"{CONTIG}_{index} # {start} # {end} # 1 # ID=1_{index};partial=00"
+
+
+def card_model_key(ordinal):
+    """An RGI JSON second-level key: the BLAST subject id of the CARD reference
+    model the hit matched. Not an ORF identifier, though it reads like one."""
+    return f"gnl|BL_ORD_ID|{ordinal}|hsp_num:0"
 
 
 def rgi_tab_report(rows):
@@ -102,18 +115,48 @@ class TestAnalysisChain(unittest.TestCase):
         #   aac(6')-Ib   100% identity, full length  -> not novel
         #   tetA         99% identity, 45% coverage  -> novel on COVERAGE only,
         #                                               which is the whole point
+        # Nested the way `rgi main` really nests: ORF -> CARD reference model ->
+        # hit. The top-level key is the ORF's Prodigal header (the contig is a
+        # field on the hit), and the key under it is the model that ORF matched.
         cls.rgi_json = WORK / "03_resistance" / "rgi_results.json"
         cls.rgi_json.write_text(json.dumps({
-            CONTIG: {
-                "orf1": rgi_hit("blaCTX-M-15", "CTX-M-15", 92.5, 1000, 1876,
-                                "antibiotic inactivation", "CTX-M beta-lactamase", "cephalosporin"),
-                "orf2": rgi_hit("aac(6')-Ib", "AAC(6')-Ib", 100.0, 8000, 8600,
-                                "antibiotic inactivation", "AAC(6') aminoglycoside", "aminoglycoside"),
-                "orf3": rgi_hit("tetA", "TetA", 99.0, 20000, 20300,
-                                "antibiotic efflux", "major facilitator superfamily", "tetracycline"),
+            prodigal_orf(1, 1000, 1876): {
+                card_model_key(612): rgi_hit(
+                    "blaCTX-M-15", "CTX-M-15", 92.5, 1000, 1876,
+                    "antibiotic inactivation", "CTX-M beta-lactamase", "cephalosporin"),
+            },
+            prodigal_orf(2, 8000, 8600): {
+                card_model_key(1370): rgi_hit(
+                    "aac(6')-Ib", "AAC(6')-Ib", 100.0, 8000, 8600,
+                    "antibiotic inactivation", "AAC(6') aminoglycoside", "aminoglycoside"),
+            },
+            prodigal_orf(3, 20000, 20300): {
+                card_model_key(2071): rgi_hit(
+                    "tetA", "TetA", 99.0, 20000, 20300,
+                    "antibiotic efflux", "major facilitator superfamily", "tetracycline"),
             },
             "_metadata": {"rgi_version": "6.0.3"},
         }))
+        # One ORF carrying several competing CARD models, the shape that made a
+        # single gene look like hundreds. Deliberately not in bit-score order, so
+        # a test passing on document order alone would fail.
+        cls.ampc_orf = prodigal_orf(9, 30000, 31100)
+        cls.rgi_variants_json = WORK / "03_resistance" / "rgi_variants.json"
+        cls.rgi_variants_json.write_text(json.dumps({
+            cls.ampc_orf: {
+                card_model_key(612): rgi_hit("ACT-1", "ACT-1", 98.9, 30000, 31100,
+                                             "antibiotic inactivation", "ACT beta-lactamase",
+                                             "cephalosporin", bit_score=900.0),
+                card_model_key(3141): rgi_hit("ACT-77", "ACT-77", 99.48, 30000, 31100,
+                                              "antibiotic inactivation", "ACT beta-lactamase",
+                                              "cephalosporin", bit_score=1200.0),
+                card_model_key(5284): rgi_hit("CMH-9", "CMH-9", 97.1, 30000, 31100,
+                                              "antibiotic inactivation", "ACT beta-lactamase",
+                                              "cephalosporin", bit_score=1100.0),
+            },
+            "_metadata": {"rgi_version": "6.0.3"},
+        }))
+
         (WORK / "03_resistance" / "rgi_results.txt").write_text(rgi_tab_report([
             ("blaCTX-M-15", 1000, 1876, 92.5, 100.00, "cephalosporin"),
             ("aac(6')-Ib", 8000, 8600, 100.0, 100.00, "aminoglycoside"),
@@ -184,6 +227,53 @@ class TestAnalysisChain(unittest.TestCase):
         # coverage exists only in RGI's tab report; the CSV column was empty
         self.assertEqual(genes["blaCTX-M-15"]["percent_coverage"], "100.00")
         self.assertEqual(genes["tetA"]["percent_coverage"], "45.00")
+
+    def test_03b_one_row_per_orf_not_one_per_card_variant(self):
+        """An ORF's competing CARD models are one gene, not many.
+
+        RGI keeps every reference model that passed the cutoff for an ORF, so a
+        single AmpC beta-lactamase comes back as ACT-77, ACT-1, CMH-9 and ~220
+        more -- allelic variants of that one enzyme in CARD, not separate genes in
+        the isolate. Reporting each as its own row is what made P106E1_S148 list
+        230 antibiotic inactivation genes against the 2 CARD's own site shows, and
+        it inflated every gene column downstream because the master report reads
+        this CSV. Keep the one RGI itself reports as Best_Hit_ARO: highest bit
+        score, which reproduced RGI's own pick on all 31 ORFs of that isolate."""
+        out = WORK / "03_resistance" / "rgi_variants.csv"
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPTS / "rgi_json_to_csv.py"),
+             str(self.rgi_variants_json), str(out)],
+            cwd=ROOT, capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+        rows = list(csv.DictReader(out.open()))
+        self.assertEqual(len(rows), 1, f"one ORF must yield one row, got {len(rows)}")
+        self.assertEqual(rows[0]["best_hit_aro"], "ACT-77")
+        reported = {r["best_hit_aro"] for r in rows}
+        self.assertNotIn("ACT-1", reported)
+        self.assertNotIn("CMH-9", reported)
+        # The columns must name the ORF and its contig, not the CARD model: orf_id
+        # held the BLAST subject id and contig held the Prodigal header, which is
+        # how one gene could look like hundreds of separate ORFs.
+        self.assertEqual(rows[0]["contig"], CONTIG)
+        self.assertNotIn("BL_ORD_ID", rows[0]["orf_id"])
+        self.assertEqual(rows[0]["orf_id"], self.ampc_orf)
+
+    def test_03c_extract_rgi_proteins_writes_one_record_per_orf(self):
+        """Same collapse, one script further on: an ORF has a single protein
+        sequence, so emitting one FASTA record per CARD model wrote the identical
+        sequence hundreds of times under different variant names -- and every one
+        of them was then BLASTed by blast_ncbi."""
+        proteins_fasta = WORK / "04_blast" / "variant_proteins.fasta"
+        proteins_csv = WORK / "04_blast" / "variant_proteins.csv"
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPTS / "extract_rgi_proteins.py"),
+             str(self.rgi_variants_json), str(proteins_fasta), str(proteins_csv)],
+            cwd=ROOT, capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        headers = [ln for ln in proteins_fasta.read_text().splitlines() if ln.startswith(">")]
+        self.assertEqual(len(headers), 1, f"one ORF, one protein; got {headers}")
+        self.assertIn("ACT-77", headers[0])
 
     def _novelty_rows(self, coverage_min=80, identity_min=95):
         novelty = WORK / "03_resistance" / "novelty_report.txt"
