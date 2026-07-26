@@ -15,7 +15,7 @@ from pathlib import Path
 # rule, so the scripts directory is not already on the path.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from rgi_json import iter_hits  # noqa: E402
+from rgi_json import iter_best_hits  # noqa: E402
 
 rgi_json = sys.argv[1]
 proteins_fasta = sys.argv[2]
@@ -32,7 +32,7 @@ with open(rgi_json) as file_handle:
     rgi_data = json.load(file_handle)
 
 
-hits = list(iter_hits(rgi_data))
+hits = list(iter_best_hits(rgi_data))
 
 with open(proteins_fasta, "w") as fasta_file_handle, open(proteins_csv, "w", newline="") as csv_file_handle:
     writer = csv.writer(csv_file_handle)

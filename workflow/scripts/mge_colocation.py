@@ -26,7 +26,7 @@ from pathlib import Path
 # so the scripts directory is not already on the path.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from rgi_json import extract_aro_category, iter_hits  # noqa: E402
+from rgi_json import extract_aro_category, iter_best_hits  # noqa: E402
 
 
 def _contig_token(contig_name):
@@ -79,7 +79,7 @@ def load_ar_genes(rgi_json):
 		return []
 
 	resistance_genes, seen = [], set()
-	for _orf_id, hit, contig in iter_hits(rgi_data):
+	for _orf_id, hit, contig in iter_best_hits(rgi_data):
 		# Keep only Perfect/Strict RGI calls, the same cut the master report's
 		# category columns make (generate_master_report._resistance_summary). Loose
 		# hits are low-identity partial/homology matches -- a genome yields dozens --
