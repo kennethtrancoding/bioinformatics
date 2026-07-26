@@ -284,6 +284,42 @@ class TestAnalysisChain(unittest.TestCase):
         self.assertEqual(rows["blaCTX-M-15"]["nearest_distance_bp"], "0")
         self.assertEqual(rows["aac(6')-Ib"]["on_mobile_element"], "no")
 
+    def test_07b_loose_rgi_hits_are_not_reported_as_mge_linked(self):
+        """A Loose RGI call overlapping an MGE must not surface as MGE-linked
+        resistance. The master report's category columns already drop Loose
+        (generate_master_report._resistance_summary), but its
+        mobile_element_linked_resistance_genes column reads this summary as-is --
+        so if colocation counted Loose hits, that one column reported resistance
+        the rest of the report had filtered out. The cut belongs here, where the
+        RGI hits are read, so the colocation CSV, its summary counts, and the
+        sample report's on-MGE tab all agree."""
+        loose_rgi = WORK / "03_resistance" / "rgi_with_loose.json"
+        strict_hit = rgi_hit("blaCTX-M-15", "CTX-M-15", 92.5, 1000, 1876,
+                             "antibiotic inactivation", "CTX-M beta-lactamase", "cephalosporin")
+        loose_hit = rgi_hit("spuriousLoose", "spurious", 55.0, 1100, 1500,
+                            "antibiotic efflux", "major facilitator superfamily", "tetracycline")
+        loose_hit["type_match"] = "Loose"  # same coordinates band as the MGE below
+        loose_rgi.write_text(json.dumps({CONTIG: {"orf1": strict_hit, "orf2": loose_hit}}))
+
+        out_csv = WORK / "06_mobile_elements" / "loose_colocation.csv"
+        out_json = WORK / "06_mobile_elements" / "loose_colocation.json"
+        proc = subprocess.run(
+            [sys.executable, str(SCRIPTS / "mge_colocation.py"),
+             "--mge-csv", str(self.mef_csv), "--rgi-json", str(loose_rgi),
+             "--out-csv", str(out_csv), "--out-json", str(out_json),
+             "--sample-id", "LOOSE", "--proximity-bp", "5000"],
+            cwd=ROOT, capture_output=True, text=True)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+
+        summary = json.loads(out_json.read_text())
+        self.assertIn("blaCTX-M-15", summary["mobile_element_linked_genes"])
+        self.assertNotIn("spuriousLoose", summary["mobile_element_linked_genes"])
+        # Dropped outright, not merely marked off-MGE: a Loose hit is not one of
+        # the resistance genes the run is reporting at all.
+        genes = {r["resistance_gene"] for r in csv.DictReader(out_csv.open())}
+        self.assertNotIn("spuriousLoose", genes)
+        self.assertEqual(summary["resistance_genes_total"], 1)
+
     def test_08_generate_sample_report(self):
         report = WORK / "summary" / "report.html"
         mlst_json = WORK / "05_mlst" / "mlst_results.json"
