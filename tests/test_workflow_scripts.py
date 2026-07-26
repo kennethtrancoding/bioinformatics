@@ -259,6 +259,24 @@ class TestAnalysisChain(unittest.TestCase):
         self.assertNotIn("BL_ORD_ID", rows[0]["orf_id"])
         self.assertEqual(rows[0]["orf_id"], self.ampc_orf)
 
+    def test_03d_novelty_judges_each_orf_once_not_each_card_variant(self):
+        """Novelty had its own copy of the flatten, with the same defect.
+
+        Judging every competing model separately turned one AmpC into ~220
+        candidate novel variants, each with its own identity, so a single
+        borderline gene could fill the sample report's novelty tab on its own."""
+        novelty = WORK / "03_resistance" / "variant_novelty.txt"
+        run_script("evaluate_novelty.py",
+                   input=NS(self.rgi_variants_json, rgi_json=self.rgi_variants_json),
+                   output=NS(novelty_report=novelty),
+                   params=NS(coverage_min=80, identity_min=95))
+        text = novelty.read_text()
+        self.assertIn("Total hits: 1", text)
+        genes = {line.split("\t")[0] for line in text.splitlines() if "\t" in line}
+        self.assertIn("ACT-77", genes)
+        self.assertNotIn("ACT-1", genes)
+        self.assertNotIn("CMH-9", genes)
+
     def test_03c_extract_rgi_proteins_writes_one_record_per_orf(self):
         """Same collapse, one script further on: an ORF has a single protein
         sequence, so emitting one FASTA record per CARD model wrote the identical
