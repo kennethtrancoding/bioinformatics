@@ -71,6 +71,14 @@ def rgi_hit(aro, model, identity, start, end, mechanism, family, drug, bit_score
         "orf_end": end,
         "orf_strand": "+",
         "orf_prot_sequence": "MVKKSLRQFTLMATATVTLLLGSVPLYAQTAD",
+        # The per-query sequence panel needs all of these: query/match/
+        # sequence_from_db for the pairwise protein alignment, and both DNA
+        # strings for the side-by-side boxes under it.
+        "query": "MVKKSLRQFTLMATATVTLLLGSVPLYAQTAD",
+        "match": "MVKKSLRQFTL+ATATVTLLLGSVPLYAQTAD"[:32],
+        "sequence_from_db": "MVKKSLRQFTLLATATVTLLLGSVPLYAQTAD",
+        "orf_dna_sequence": "ATGGTGAAAAAATCACTGCGCCAGTTCACGCTG",
+        "dna_sequence_from_broadstreet": "ATGGTGAAAAAATCACTGCGCCAGTTCACGCTC",
         "ARO_category": {
             "1": {"category_aro_class_name": "Drug Class", "category_aro_name": drug},
             "2": {"category_aro_class_name": "Resistance Mechanism", "category_aro_name": mechanism},
@@ -499,6 +507,18 @@ class TestAnalysisChain(unittest.TestCase):
         # being read at a glance.
         self.assertIn("Resistance (CARD)", html, "resistance column is not attributed to CARD")
         self.assertIn("on MGE", html, "blaCTX-M-15 overlaps IS26 and should be flagged on-MGE")
+        # The per-query sequence panel joins the CSV rows to rgi_results.json on
+        # orf_id and skips any row it cannot find a key for, so a key mismatch
+        # between the two removes the whole section rather than failing. It did:
+        # the CSV moved to keying by ORF while the sequence index still keyed by
+        # the hit's CARD-model key, and every dropdown disappeared silently.
+        self.assertIn("Query sequences, predicted vs CARD", html,
+                      "per-query sequence panel is missing entirely")
+        self.assertIn("seq-details", html)
+        self.assertEqual(html.count("<details class=\"seq-details\">"), 3,
+                         "expected one collapsible sequence panel per ORF")
+        self.assertIn("Protein alignment, predicted vs CARD", html)
+        self.assertIn("CARD reference DNA", html)
 
     def test_09_generate_master_report(self):
         master = TMP_ROOT / "results" / "SCRIPTSMOKE" / "master_report.csv"

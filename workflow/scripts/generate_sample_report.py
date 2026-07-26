@@ -50,6 +50,7 @@ from report_format import (
 	table,
 )
 from report_io import read_csv_rows, read_json
+from rgi_json import iter_best_hits
 
 
 def _inputs_from_sample_dir(sample_dir, report_out=None):
@@ -129,30 +130,21 @@ Path(report_file).parent.mkdir(parents=True, exist_ok=True)
 
 
 def _rgi_sequence_index(input_path):
-	"""orf_id -> the predicted and CARD sequences RGI recorded for that hit.
+	"""orf_id -> the predicted and CARD sequences RGI recorded for that ORF.
 
 	rgi_results.csv carries no sequences; rgi_results.json does -- the predicted
 	ORF's protein/DNA (orf_prot_sequence / orf_dna_sequence), CARD's reference
 	protein/DNA (sequence_from_broadstreet / dna_sequence_from_broadstreet), and
-	the pairwise protein alignment (query / match / sequence_from_db). Keyed on
-	the same orf_id the CSV rows use so the CARD panel can join the two."""
-	index = {}
+	the pairwise protein alignment (query / match / sequence_from_db).
 
-	def _walk(node):
-		if isinstance(node, dict):
-			for key, value in node.items():
-				if isinstance(key, str) and key.startswith("_"):
-					continue
-				if isinstance(value, dict) and "orf_prot_sequence" in value:
-					index[key] = value
-				elif isinstance(value, (dict, list)):
-					_walk(value)
-		elif isinstance(node, list):
-			for item in node:
-				_walk(item)
-
-	_walk(read_json(input_path))
-	return index
+	Keyed on the same orf_id the CSV rows use, because the CARD panel joins the
+	two on it and drops any row it cannot find a key for. That join is why this
+	goes through iter_best_hits rather than walking the JSON here: a private walk
+	keyed these by the hit's own JSON key (the CARD model) while the CSV moved to
+	the ORF, and the panel silently rendered nothing at all."""
+	return {
+		orf_id: hit for orf_id, hit, _contig in iter_best_hits(read_json(input_path))
+	}
 
 
 def _linked_data_values(linked_data):
