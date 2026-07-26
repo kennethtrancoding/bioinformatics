@@ -80,6 +80,15 @@ def load_ar_genes(rgi_json):
 
 	resistance_genes, seen = [], set()
 	for _orf_id, hit, contig in iter_hits(rgi_data):
+		# Keep only Perfect/Strict RGI calls, the same cut the master report's
+		# category columns make (generate_master_report._resistance_summary). Loose
+		# hits are low-identity partial/homology matches -- a genome yields dozens --
+		# and letting them through here would report a spurious gene as sitting ON a
+		# mobile element, the run's headline public-health signal, and carry it
+		# unfiltered into the master report's mobile_element_linked_resistance_genes
+		# column (which reads this summary rather than re-filtering it).
+		if (hit.get("type_match") or "").strip().lower() == "loose":
+			continue
 		start_position, end_position = (
 			_to_int(hit.get("orf_start")),
 			_to_int(hit.get("orf_end")),
