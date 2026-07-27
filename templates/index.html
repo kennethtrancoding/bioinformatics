@@ -44,7 +44,10 @@
 			<h1>Bulk Import</h1>
 			<p>
 				Choose a FASTA/FASTQ folder directly from the sequencing company. R1/R2 pairs and
-				checksum data are matched automatically.
+				checksum data are matched automatically. A .zip in the folder is unpacked here and
+				imported the same way; only reads, the stats workbook and checksum lists are taken
+				out of it, and an archive that is damaged, encrypted or larger than this box can
+				hold is refused with the reason.
 			</p>
 			<label for="import-folder">Folder</label>
 			<input type="file" id="import-folder" webkitdirectory multiple />

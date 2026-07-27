@@ -523,6 +523,7 @@ let IMPORT_BATCH_BYTES = 2 * 1024 * 1024 * 1024;
 // The pairing has to agree with the server's: an R1 and its R2 must ride in the
 // same batch, or the server finds no mate for it and skips the sample entirely.
 let FASTQ_SUFFIXES = [".fastq.gz", ".fq.gz", ".fastq", ".fq"];
+let ZIP_SUFFIX = ".zip";
 let R1_MARKER = /_R1([_.])/;
 let ISOLATE_RE = /_R[12][_.].*$/;
 
@@ -537,19 +538,29 @@ function isFastq(fileName) {
 	});
 }
 
+// Mirrors is_zip_name() in workflow/helpers/archive_import.py. What is inside an
+// archive is the server's business -- it opens it, checks it and pairs it -- so
+// here a zip is only ever one opaque, indivisible file to get across the wire.
+function isZip(fileName) {
+	return fileName.toLowerCase().endsWith(ZIP_SUFFIX);
+}
+
 function isolateIdFor(fileName) {
 	return fileName.replace(ISOLATE_RE, "");
 }
 
 // Split the folder into units that must not be divided across batches: each
 // R1/R2 pair, plus each FASTQ with no mate (kept, rather than dropped here, so
-// the server still reports it as unpaired instead of it vanishing silently).
+// the server still reports it as unpaired instead of it vanishing silently),
+// plus each archive.
 function importUnits(files) {
 	let fastqsByName = {};
+	let zipFiles = [];
 	let nonFastqFiles = [];
 	for (let i = 0; i < files.length; i++) {
 		let fileName = basename(uploadName(files[i]));
 		if (isFastq(fileName)) fastqsByName[fileName] = files[i];
+		else if (isZip(fileName)) zipFiles.push(files[i]);
 		else nonFastqFiles.push(files[i]);
 	}
 
@@ -566,6 +577,13 @@ function importUnits(files) {
 		});
 	Object.keys(fastqsByName).forEach(function (fileName) {
 		if (!pairedNames[fileName]) units.push([fastqsByName[fileName]]);
+	});
+	// An archive is a unit of one: it cannot be split, so the most batching can do
+	// for it is keep it from riding along with someone else's reads. Several small
+	// zips still spread over several requests; one 20 GB zip is one request, and
+	// nothing here can change that -- which is what the folder option is for.
+	zipFiles.forEach(function (file) {
+		units.push([file]);
 	});
 
 	return { units: units, nonFastqFiles: nonFastqFiles };
@@ -606,7 +624,12 @@ function unsentUnits(units) {
 	return registeredIsolates().then(function (seen) {
 		if (!seen) return units;
 		return units.filter(function (unit) {
-			return !seen[isolateIdFor(basename(uploadName(unit[0])))];
+			let fileName = basename(uploadName(unit[0]));
+			// Which samples an archive holds is not knowable until the server
+			// opens it, so it always goes. Re-importing ones the job already has
+			// is harmless -- the manifest updates in place.
+			if (isZip(fileName)) return true;
+			return !seen[isolateIdFor(fileName)];
 		});
 	});
 }
@@ -641,15 +664,20 @@ function trimAlreadyRegistered(files) {
 		return files.filter(function (file) {
 			let fileName = basename(uploadName(file));
 			// Non-FASTQ files always ride along: the stats workbook is what
-			// decides whether MD5s get checked at all.
+			// decides whether MD5s get checked at all, and an archive cannot be
+			// trimmed at all from out here.
 			return !isFastq(fileName) || !seen[isolateIdFor(fileName)];
 		});
 	});
 }
 
-function hasFastq(files) {
+// Whether a batch still holds anything the server would register. A batch
+// trimmed down to the workbook alone is one whose reads all landed already;
+// an archive still counts, because nothing out here knows what is in it.
+function hasPayload(files) {
 	return files.some(function (file) {
-		return isFastq(basename(uploadName(file)));
+		let fileName = basename(uploadName(file));
+		return isFastq(fileName) || isZip(fileName);
 	});
 }
 
@@ -808,7 +836,7 @@ document.getElementById("import-btn").addEventListener("click", async function (
 			if (attempt > 1) {
 				// Ask what actually landed before spending the bandwidth again.
 				batch = await trimAlreadyRegistered(batch);
-				if (!hasFastq(batch)) {
+				if (!hasPayload(batch)) {
 					// The whole batch was registered after all -- the reply was what
 					// went missing, not the data. Nothing left to send.
 					result = { ok: true, status: 200, data: { job_id: currentJobId } };

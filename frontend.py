@@ -28,6 +28,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 from werkzeug.utils import secure_filename
 
 from workflow.helpers import api_registry, cloud_import, s3_storage
+from workflow.helpers.archive_import import UnsafeArchiveError, extract_zip, is_zip_name
 from workflow.helpers.bvbrc_client import BVBRCClient
 from workflow.helpers.import_samples import isolate_id_for
 from workflow.helpers.import_service import CloudImportManager, ImportService
@@ -836,6 +837,21 @@ def _flatten_single_root(resolved_path):
 		resolved_path = directory_entries[0]
 
 
+def _unpack_dir_for(staging_dir, safe_relative_path):
+	"""A directory of its own for one uploaded archive, inside the staging tree.
+
+	Its own, because extract_zip owns what it is given and deletes it if the
+	archive turns out to be hostile -- so two archives uploaded together (or one
+	whose name collides with a folder already staged) must never share one.
+	"""
+	base_path = staging_dir / safe_relative_path.parent / safe_relative_path.stem
+	unpack_path, suffix_counter = base_path, 2
+	while unpack_path.exists():
+		unpack_path = base_path.with_name(f"{base_path.name}_{suffix_counter}")
+		suffix_counter += 1
+	return unpack_path
+
+
 @app.route("/import", methods=["POST"])
 @_counts_as_upload
 def import_folder():
@@ -850,6 +866,7 @@ def import_folder():
 		return job_error
 
 	temporary_import_dir = Path(tempfile.mkdtemp(prefix="import_"))
+	archive_warnings = []
 	try:
 		try:
 			for file_handle in uploaded_file_names:
@@ -862,9 +879,33 @@ def import_folder():
 				if not parts:
 					continue
 				safe_relative_path = Path(*[secure_filename(path_part) for path_part in parts])
+				# A .zip is expanded into the staging tree and never staged as
+				# itself: from here on the archive's reads are indistinguishable
+				# from a folder upload's, and go through the same pairing,
+				# checksum verification and manifest registration.
+				#
+				# Read straight out of the upload's own buffer, which Werkzeug has
+				# already spooled to disk -- saving the archive first would put a
+				# second full copy of a 20 GB delivery on the box for no reason.
+				# What it costs instead is that a zip cannot be batched the way a
+				# folder is: the whole thing arrives in one request, and the
+				# extracted reads land before any of them can be released to S3.
+				if is_zip_name(safe_relative_path.name):
+					extract_zip(
+						file_handle.stream,
+						_unpack_dir_for(temporary_import_dir, safe_relative_path),
+						archive_warnings,
+						display_name=safe_relative_path.name,
+					)
+					continue
 				staged_upload_path = temporary_import_dir / safe_relative_path
 				staged_upload_path.parent.mkdir(parents=True, exist_ok=True)
 				file_handle.save(staged_upload_path)
+		except UnsafeArchiveError as exception:
+			# The archive's own verdict, said as it was written: it names the file
+			# and what was wrong with it, and re-sending it will not change the
+			# answer -- which is why this is a 400 the browser does not retry.
+			return jsonify({"error": str(exception)}), 400
 		except OSError as exception:
 			return jsonify({"error": f"Could not stage uploaded files: {exception}"}), 500
 
@@ -883,6 +924,11 @@ def import_folder():
 		except Exception as exception:
 			return jsonify({"error": str(exception)}), 500
 		import_result["job_id"] = job_id
+		# What the archives refused to unpack belongs in the same list as what the
+		# import skipped: to the person reading it, both are "files I sent that did
+		# not become samples", and only one of the two used to be reported.
+		import_result["warnings"] = archive_warnings + import_result["warnings"]
+		import_result["skipped"] = len(import_result["warnings"])
 		# No backup pass here: ImportService pushed each pair to S3 and released the
 		# local copy as import_directory registered it, so by now the reads this
 		# request added are already durable and off the disk.

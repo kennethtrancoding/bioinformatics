@@ -75,7 +75,8 @@ Open `http://127.0.0.1:5001`.
 
 Typical browser workflow:
 
-1. Upload one R1/R2 pair, or import a folder containing paired FASTQ files.
+1. Upload one R1/R2 pair, or import a folder containing paired FASTQ files (or
+   `.zip` archives of them — see [Zipped Deliveries](#zipped-deliveries)).
    (Pasting a OneDrive/Google Drive share link is currently disabled — see
    [Cloud Imports](#cloud-imports-onedrive--google-drive).)
 2. Add files through any combination of the pair and folder methods.
@@ -111,6 +112,36 @@ half-written; once a run has finished — completed **or** failed — the sample
 the inputs that produced its results, so editing them would leave results that no
 longer match their inputs. Both `/submit`/`/import` and `/delete` return `409` in
 those states. A different set of files is a different job: start a new one.
+
+### Zipped Deliveries
+
+A `.zip` that comes up with a folder import is expanded on the server and
+imported exactly like loose files: same R1/R2 pairing, same MD5 verification
+against `DNA Sequencing Stats.xlsx`, same manifest, same job ID. Nothing
+downstream can tell a zipped delivery from an unzipped one.
+
+An uploaded archive is untrusted input that the server opens on its own disk, so
+`workflow/helpers/archive_import.py` refuses rather than unpacks when:
+
+- a member's name escapes the staging directory (`..`, an absolute path, a
+  Windows drive letter), or is a symlink, device or anything but a regular file;
+- the archive is encrypted, damaged, or holds more than `ZIP_MAX_MEMBERS`
+  (20,000) files;
+- a member is bigger than `ZIP_MAX_MEMBER_BYTES` (64 GB), the archive expands
+  past `ZIP_MAX_TOTAL_BYTES` (512 GB), or anything in it expands more than
+  `ZIP_MAX_COMPRESSION_RATIO` (200x — real reads are ~1x, a zip bomb is 1000x+);
+- unpacking it would leave the box with less than `ZIP_FREE_DISK_HEADROOM_BYTES`
+  (1 GB) free.
+
+Sizes are enforced against the bytes that actually arrive, not the headers that
+declare them. Only reads, the stats workbook and checksum lists (`.xlsx`, `.csv`,
+`.tsv`, `.txt`, `.md5`) are written out at all — a nested archive or a script in
+the delivery is left in the zip and reported as skipped. A refused archive fails
+that upload with the reason and leaves nothing behind.
+
+One thing a zip costs: it cannot be split. A folder goes up as several bounded
+requests, while an archive is one request however large it is, so a very large
+delivery still transfers more reliably as a folder.
 
 ### Timing
 
@@ -617,10 +648,17 @@ point at which one box stops being the right shape).
 Two things to know before raising `BVBRC_MAX_IN_FLIGHT`:
 
 - **BV-BRC's queue is not free.** The more jobs you have queued there at once, the
-  longer each one sits, and `bvbrc.max_wait_time` (`config/config.yaml`, 2 h) is the
+  longer each one sits, and `bvbrc.max_wait_time` (`config/config.yaml`, 3 h) is the
   point at which the poll gives up and the sample *fails*. Pushing a hundred
   assemblies at a shared public service in one go is a good way to convert their
   queue time into timeouts. Raise `max_wait_time` alongside it.
+
+  That 3 h is measured from the last file BV-BRC returned, not from submission:
+  every file that lands in the job's workspace folder restarts the clock, so a job
+  still delivering output is never cut off mid-assembly, and what the timeout
+  actually catches is a job that has stalled or is still sitting in the queue.
+  `bvbrc.max_total_wait_time` (12 h) is the backstop — however much progress a job
+  reports, it cannot hold a BV-BRC slot for longer than that.
 - **Each in-flight sample is a live poll process here** (tens of MB). Twelve is
   nothing; two hundred is gigabytes of idle Python.
 
@@ -666,6 +704,7 @@ workflow/helpers/jobs.py           Job ID paths and validation
 workflow/helpers/job_store.py      Atomic per-job manifest/status/upload state
 workflow/helpers/bvbrc_client.py   BV-BRC API client
 workflow/helpers/import_samples.py Folder import and FASTQ pairing
+workflow/helpers/archive_import.py Safe expansion of uploaded .zip deliveries
 workflow/helpers/cloud_import.py   OneDrive/Google Drive share-link pulls
 workflow/helpers/preprocess.py     FASTQ integrity and checksum verification
 workflow/helpers/utils.py          Logging, retry, checksums, streaming zip
