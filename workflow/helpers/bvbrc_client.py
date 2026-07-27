@@ -599,28 +599,98 @@ class BVBRCClient:
 			logger.error(f"Failed to get job status: {exception}")
 			return None
 
+	# How deep to look for a job's output while it runs. Shallower than the
+	# depth the CGA download walks at, because this runs every poll: it only has
+	# to notice that files are arriving, not find a particular one.
+	_PROGRESS_WALK_DEPTH = 3
+
+	def _output_fingerprint(self, output_paths: List[str]) -> Optional[frozenset]:
+		"""What BV-BRC has written for this job so far, as a comparable set.
+
+		(path, size) rather than just the paths, so a file still being written
+		counts as progress on every poll it grows. None means the workspace could
+		not be read at all this time round -- distinct from "read it, nothing
+		there yet", which is an empty set.
+		"""
+		entries = []
+		reachable = False
+		for output_path in output_paths:
+			try:
+				found = self.walk_workspace(output_path, max_depth=self._PROGRESS_WALK_DEPTH)
+			except Exception as exception:
+				logger.debug(f"Could not list {output_path} while polling: {exception}")
+				continue
+			reachable = True
+			entries.extend((entry["path"], entry.get("size")) for entry in found)
+		return frozenset(entries) if reachable else None
+
 	def wait_for_job(
-		self, job_id: str, max_wait_seconds: int = 3600, poll_interval: int = 30
+		self,
+		job_id: str,
+		max_wait_seconds: int = 10800,
+		poll_interval: int = 30,
+		output_paths: Optional[List[str]] = None,
+		max_total_seconds: Optional[int] = None,
 	) -> Tuple[bool, Optional[str]]:
 		"""
 		Poll job status until completion or timeout.
 
+		``max_wait_seconds`` is time without progress, not time in total: whenever
+		a file appears (or grows) under ``output_paths``, the clock starts again.
+		A Comprehensive Genome Analysis writes its output over the course of the
+		run, so a job that is still delivering files is still working, and cutting
+		it off at a fixed wall-clock figure threw away an assembly that was
+		nearly done -- and left the sample failed with hours of BV-BRC compute
+		already spent on it. Without ``output_paths`` there is nothing to observe
+		and this degrades to the old fixed timeout.
+
+		``max_total_seconds`` bounds the whole wait regardless of progress, so a
+		job that keeps touching a log file forever cannot hold a pipeline slot
+		forever. None leaves it unbounded.
+
 		Args:
 		    job_id: BV-BRC job ID
-		    max_wait_seconds: Maximum time to wait (default: 1 hour)
+		    max_wait_seconds: Maximum time to wait for the next sign of progress
+		        (default: 3 hours)
 		    poll_interval: Seconds between polls (default: 30)
+		    output_paths: Workspace folders this job writes its results into
+		    max_total_seconds: Absolute ceiling on the whole wait, if any
 
 		Returns:
 		    Tuple of (is_complete, final_status)
 		"""
+		output_paths = list(output_paths or [])
 		start_time = time.time()
+		last_progress_time = start_time
+		last_fingerprint = self._output_fingerprint(output_paths) if output_paths else None
 		last_status = None
 
-		while True:
-			elapsed = time.time() - start_time
+		# Listing a workspace costs an RPC per folder in it, so it is not done on
+		# every poll: a dozen samples in flight, each walking two result trees
+		# every 30 seconds, is a lot of traffic to point at a shared public service
+		# to answer a question about a three-hour deadline. A tenth of the idle
+		# budget notices progress in good time, and a short wait still checks at
+		# its own poll interval.
+		last_check_time = start_time
+		progress_interval = max(poll_interval, min(300, max_wait_seconds / 10))
 
-			if elapsed > max_wait_seconds:
-				logger.warning(f"Job {job_id} did not complete after {max_wait_seconds}s")
+		while True:
+			now = time.time()
+			elapsed = now - start_time
+			idle = now - last_progress_time
+
+			if idle > max_wait_seconds:
+				logger.warning(
+					f"Job {job_id} returned no new files for {idle:.0f}s "
+					f"(limit {max_wait_seconds}s, {elapsed:.0f}s elapsed in total)"
+				)
+				return False, last_status
+
+			if max_total_seconds is not None and elapsed > max_total_seconds:
+				logger.warning(
+					f"Job {job_id} was still producing files but hit the absolute "
+					f"{max_total_seconds}s ceiling on how long one job may be waited on"
+				)
 				return False, last_status
 
 			job_info = self.get_job_status(job_id)
@@ -639,7 +709,26 @@ class BVBRCClient:
 					return False, status
 
 				else:
-					logger.info(f"Job {job_id} status: {status} [{elapsed:.0f}s elapsed]")
+					logger.info(
+						f"Job {job_id} status: {status} "
+						f"[{elapsed:.0f}s elapsed, {idle:.0f}s since the last file]"
+					)
+
+			if output_paths and time.time() - last_check_time >= progress_interval:
+				last_check_time = time.time()
+				fingerprint = self._output_fingerprint(output_paths)
+				# Only a reading that succeeded can move the clock. A workspace we
+				# could not read is not evidence of progress, and neither is it
+				# evidence of a stall -- so it leaves the clock exactly where it was.
+				if fingerprint is not None:
+					if last_fingerprint is None or fingerprint != last_fingerprint:
+						if fingerprint:
+							logger.info(
+								f"Job {job_id} has returned {len(fingerprint)} file(s); "
+								f"restarting the {max_wait_seconds}s wait"
+							)
+							last_progress_time = time.time()
+					last_fingerprint = fingerprint
 
 			time.sleep(poll_interval)
 
@@ -770,8 +859,9 @@ class BVBRCClient:
 			logger.error(f"Error listing workspace files: {exception}")
 			return []
 
-	# Workspace.ls metadata tuple layout: [name, type, parent_path, ...]
-	_LS_NAME, _LS_TYPE, _LS_PARENT = 0, 1, 2
+	# Workspace.ls metadata tuple layout:
+	# [name, type, parent_path, creation_time, id, owner, size, ...]
+	_LS_NAME, _LS_TYPE, _LS_PARENT, _LS_SIZE = 0, 1, 2, 6
 	_FOLDER_TYPES = ("folder", "Directory", "job_result")
 
 	def walk_workspace(self, base_path: str, max_depth: int = 3) -> List[Dict[str, str]]:
@@ -781,7 +871,8 @@ class BVBRCClient:
 		BV-BRC app results are nested (and partly in dot-prefixed folders), so a
 		flat listing isn't enough to find a job's output files. This walks the
 		tree breadth-first up to ``max_depth`` and returns file entries as
-		dicts: {"name", "type", "path"} where ``path`` is the full workspace path.
+		dicts: {"name", "type", "path", "size"} where ``path`` is the full
+		workspace path and ``size`` is None when the listing doesn't carry one.
 
 		Args:
 		    base_path: Folder to start from.
@@ -815,7 +906,14 @@ class BVBRCClient:
 						frontier.append((full_path, depth + 1))
 				else:
 					workspace_files.append(
-						{"name": workspace_entry_name, "type": etype, "path": full_path}
+						{
+							"name": workspace_entry_name,
+							"type": etype,
+							"path": full_path,
+							"size": workspace_entry[self._LS_SIZE]
+							if len(workspace_entry) > self._LS_SIZE
+							else None,
+						}
 					)
 
 		return workspace_files

@@ -29,7 +29,9 @@ r1_remote = upload_data["r1_remote"]
 r2_remote = upload_data["r2_remote"]
 workspace = upload_data["workspace"]
 max_wait = snakemake.config["bvbrc"]["max_wait_time"]
+max_total_wait = snakemake.config["bvbrc"].get("max_total_wait_time")
 poll_interval = snakemake.config["bvbrc"]["poll_interval"]
+output_folder = f"{workspace}/taxclass_{sample_id}"
 
 client = authenticated_client(
 	snakemake.config["bvbrc"]["token_file"], snakemake.config.get("job_id")
@@ -48,7 +50,12 @@ try:
 	logger.info(f"Job submitted: {job_id}")
 
 	is_complete, final_status = client.wait_for_job(
-		job_id, max_wait_seconds=max_wait, poll_interval=poll_interval
+		job_id,
+		max_wait_seconds=max_wait,
+		poll_interval=poll_interval,
+		# Each file Kraken2 returns here restarts the wait, same as the assembly.
+		output_paths=[output_folder, f"{workspace}/.taxclass_{sample_id}"],
+		max_total_seconds=max_total_wait,
 	)
 
 	if not is_complete:
@@ -60,7 +67,6 @@ try:
 
 	logger.info("TaxonomicClassification complete, downloading report...")
 
-	output_folder = f"{workspace}/taxclass_{sample_id}"
 	kraken_remote = f"{output_folder}/TaxonomicClassification.txt"
 
 	if client.download_file(kraken_remote, kraken_report_file):

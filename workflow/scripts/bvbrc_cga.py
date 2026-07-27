@@ -22,6 +22,7 @@ genome_report = snakemake.output.genome_report
 full_report = snakemake.output.full_report
 cga_raw_dir = snakemake.output.cga_raw_dir
 max_wait = snakemake.params.max_wait_time
+max_total_wait = getattr(snakemake.params, "max_total_wait_time", None)
 
 Path(assembly_fasta).parent.mkdir(parents=True, exist_ok=True)
 
@@ -40,6 +41,16 @@ client = authenticated_client(
 )
 
 client.workspace = workspace
+
+# Where this job's output lands. BV-BRC writes CGA results into the job's output
+# folder and into a dot-prefixed sibling of it, and which one gets what varies by
+# recipe -- so both are watched while the job runs (each file that appears there
+# restarts the wait) and both are walked for the results afterwards.
+output_name = f"cga_{sample_id}"
+result_roots = [
+	f"{workspace}/{output_name}",
+	f"{workspace}/.{output_name}",
+]
 
 taxonomy_id = client.get_taxonomy_id(genus)
 logger.info(f"Submitting Comprehensive Genome Analysis for {sample_id}...")
@@ -65,7 +76,7 @@ if not job_id:
 	params = {
 		"r1_file": r1_remote,
 		"r2_file": r2_remote,
-		"output_name": f"cga_{sample_id}",
+		"output_name": output_name,
 		"taxonomy_id": taxonomy_id,
 		"assembly_method": assembly_method,
 	}
@@ -83,7 +94,11 @@ logger.info(f"Job ID: {job_id}")
 
 poll_interval = snakemake.config["bvbrc"]["poll_interval"]
 is_complete, final_status = client.wait_for_job(
-	job_id, max_wait_seconds=max_wait, poll_interval=poll_interval
+	job_id,
+	max_wait_seconds=max_wait,
+	poll_interval=poll_interval,
+	output_paths=result_roots,
+	max_total_seconds=max_total_wait,
 )
 
 if not is_complete:
@@ -92,17 +107,11 @@ if not is_complete:
 logger.info("Comprehensive Genome Analysis complete")
 
 # Download assembly and genome report.
-# BV-BRC writes CGA results into the job's output folder (and nested/dot-prefixed
-# sub-folders) under names that vary by recipe, so we resolve the actual remote
-# files by walking the workspace rather than guessing a single path. A missing
-# result is a hard error: silently substituting a placeholder hides a failed or
-# empty assembly and corrupts every downstream step (RGI, novelty, reports).
-output_name = f"cga_{sample_id}"
-result_roots = [
-	f"{workspace}/{output_name}",
-	f"{workspace}/.{output_name}",
-]
-
+# The results sit under result_roots (defined above) with names that vary by
+# recipe, so we resolve the actual remote files by walking the workspace rather
+# than guessing a single path. A missing result is a hard error: silently
+# substituting a placeholder hides a failed or empty assembly and corrupts every
+# downstream step (RGI, novelty, reports).
 logger.info(f"Locating CGA results under {result_roots}...")
 remote_file_entries = []
 for result_root in result_roots:
