@@ -28,9 +28,9 @@ with open(upload_log_file) as file_handle:
 r1_remote = upload_data["r1_remote"]
 r2_remote = upload_data["r2_remote"]
 workspace = upload_data["workspace"]
-max_wait = snakemake.config["bvbrc"]["max_wait_time"]
-max_total_wait = snakemake.config["bvbrc"].get("max_total_wait_time")
 poll_interval = snakemake.config["bvbrc"]["poll_interval"]
+max_attempts = snakemake.config["bvbrc"].get("max_job_attempts", 3)
+retry_delay = snakemake.config["bvbrc"].get("retry_delay", 60)
 output_folder = f"{workspace}/taxclass_{sample_id}"
 
 client = authenticated_client(
@@ -43,27 +43,16 @@ genus = "Unknown"
 logger.info(f"Submitting TaxonomicClassification for {sample_id}...")
 
 try:
-	job_id = client.submit_taxonomic_classification(r1_remote, r2_remote, sample_id)
-	if not job_id:
-		raise RuntimeError("Job submission returned None")
-
-	logger.info(f"Job submitted: {job_id}")
-
-	is_complete, final_status = client.wait_for_job(
-		job_id,
-		max_wait_seconds=max_wait,
+	# Waited on with no deadline, and resubmitted if BV-BRC fails it -- same as
+	# the assembly. run_job raises once BV-BRC has failed every attempt, which
+	# the handler below turns into an Unknown genus rather than a failed sample.
+	job_id = client.run_job(
+		lambda: client.submit_taxonomic_classification(r1_remote, r2_remote, sample_id),
 		poll_interval=poll_interval,
-		# Each file Kraken2 returns here restarts the wait, same as the assembly.
-		output_paths=[output_folder, f"{workspace}/.taxclass_{sample_id}"],
-		max_total_seconds=max_total_wait,
+		max_attempts=max_attempts,
+		retry_delay=retry_delay,
+		on_submit=lambda new_job_id: logger.info(f"Job submitted: {new_job_id}"),
 	)
-
-	if not is_complete:
-		# final_status distinguishes a genuine server-side failure ("failed")
-		# from the client giving up while still queued/in-progress ("timed out").
-		if final_status == "failed":
-			raise RuntimeError("TaxonomicClassification failed server-side on BV-BRC")
-		raise RuntimeError(f"TaxonomicClassification did not complete (status: {final_status})")
 
 	logger.info("TaxonomicClassification complete, downloading report...")
 

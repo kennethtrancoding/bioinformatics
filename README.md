@@ -648,17 +648,20 @@ point at which one box stops being the right shape).
 Two things to know before raising `BVBRC_MAX_IN_FLIGHT`:
 
 - **BV-BRC's queue is not free.** The more jobs you have queued there at once, the
-  longer each one sits, and `bvbrc.max_wait_time` (`config/config.yaml`, 3 h) is the
-  point at which the poll gives up and the sample *fails*. Pushing a hundred
-  assemblies at a shared public service in one go is a good way to convert their
-  queue time into timeouts. Raise `max_wait_time` alongside it.
+  longer each one sits — and each one holds its in-flight slot for the whole of that
+  wait. Pushing a hundred assemblies at a shared public service in one go does not
+  make them finish sooner; it converts the pool into a second queue in front of
+  theirs, and the run's elapsed time is what grows.
 
-  That 3 h is measured from the last file BV-BRC returned, not from submission:
-  every file that lands in the job's workspace folder restarts the clock, so a job
-  still delivering output is never cut off mid-assembly, and what the timeout
-  actually catches is a job that has stalled or is still sitting in the queue.
-  `bvbrc.max_total_wait_time` (12 h) is the backstop — however much progress a job
-  reports, it cannot hold a BV-BRC slot for longer than that.
+  It no longer converts queue time into *failures*, though. There is no deadline on a
+  BV-BRC job: it is waited on until BV-BRC reports it finished, however long their
+  queue takes. Every timeout tried here only ever managed to throw away jobs that
+  were still working. What fails a sample is BV-BRC failing the job — and because
+  those failures are frequently BV-BRC's rather than the sample's (a lost node, a
+  restarted app service), a failed job is resubmitted from scratch up to
+  `bvbrc.max_job_attempts` times (`config/config.yaml`, 3) before the sample is given
+  up on. A job BV-BRC loses track of entirely counts as a failure and is resubmitted
+  the same way.
 - **Each in-flight sample is a live poll process here** (tens of MB). Twelve is
   nothing; two hundred is gigabytes of idle Python.
 

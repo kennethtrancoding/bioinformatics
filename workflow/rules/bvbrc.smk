@@ -85,9 +85,7 @@ rule bvbrc_comprehensive_genome_analysis:
         genus_file = f"{config['results_dir']}/{{sample}}/02_assembly/genus.txt",
         upload_log = f"{config['results_dir']}/{{sample}}/02_assembly/upload.log"
     params:
-        sample_id = lambda wildcards: wildcards.sample,
-        max_wait_time = config['bvbrc']['max_wait_time'],
-        max_total_wait_time = config['bvbrc'].get('max_total_wait_time')
+        sample_id = lambda wildcards: wildcards.sample
     output:
         assembly_fasta = f"{config['results_dir']}/{{sample}}/02_assembly/assembly_contigs.fasta",
         genome_report = f"{config['results_dir']}/{{sample}}/02_assembly/genome_report.json",

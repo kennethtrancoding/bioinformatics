@@ -576,6 +576,23 @@ class BVBRCClient:
 	# Job Status & Results
 
 	@retry(max_attempts=3, delay=2.0, backoff=2.0, exceptions=(requests.RequestException,))
+	def _query_task(self, job_id: str) -> Optional[Dict[str, Any]]:
+		"""The task record BV-BRC holds for this job, or None if it holds none.
+
+		Raises rather than swallowing an RPC failure, because "the service could
+		not be reached" and "the service does not know this job" are different
+		answers and only the second one is about the job. get_job_status folds
+		them back together for callers that only want a status or nothing.
+		"""
+		rpc_result = self._rpc(
+			self.APP_SERVICE_URL, "AppService.query_tasks", [[job_id]], timeout=30
+		)
+		# result is [mapping<task_id, task_dict>]; key is always the string job_id
+		if rpc_result and isinstance(rpc_result, list) and rpc_result[0]:
+			task_map = rpc_result[0]
+			return task_map.get(str(job_id))
+		return None
+
 	def get_job_status(self, job_id: str) -> Optional[Dict[str, Any]]:
 		"""
 		Query job status via AppService.
@@ -587,150 +604,169 @@ class BVBRCClient:
 		    Dictionary with job status info, or None if error
 		"""
 		try:
-			rpc_result = self._rpc(
-				self.APP_SERVICE_URL, "AppService.query_tasks", [[job_id]], timeout=30
-			)
-			# result is [mapping<task_id, task_dict>]; key is always the string job_id
-			if rpc_result and isinstance(rpc_result, list) and rpc_result[0]:
-				task_map = rpc_result[0]
-				return task_map.get(str(job_id))
-			return None
+			return self._query_task(job_id)
 		except Exception as exception:
 			logger.error(f"Failed to get job status: {exception}")
 			return None
 
-	# How deep to look for a job's output while it runs. Shallower than the
-	# depth the CGA download walks at, because this runs every poll: it only has
-	# to notice that files are arriving, not find a particular one.
-	_PROGRESS_WALK_DEPTH = 3
+	# BV-BRC's final word on a job, as opposed to a stage of it. Anything else --
+	# 'queued', 'pending', 'in-progress', a status this client has never heard of
+	# -- is a job that has not finished yet, and is waited on.
+	_TERMINAL_FAILURE_STATUSES = frozenset(
+		{"failed", "deleted", "terminated", "cancelled", "canceled", "killed"}
+	)
 
-	def _output_fingerprint(self, output_paths: List[str]) -> Optional[frozenset]:
-		"""What BV-BRC has written for this job so far, as a comparable set.
-
-		(path, size) rather than just the paths, so a file still being written
-		counts as progress on every poll it grows. None means the workspace could
-		not be read at all this time round -- distinct from "read it, nothing
-		there yet", which is an empty set.
-		"""
-		entries = []
-		reachable = False
-		for output_path in output_paths:
-			try:
-				found = self.walk_workspace(output_path, max_depth=self._PROGRESS_WALK_DEPTH)
-			except Exception as exception:
-				logger.debug(f"Could not list {output_path} while polling: {exception}")
-				continue
-			reachable = True
-			entries.extend((entry["path"], entry.get("size")) for entry in found)
-		return frozenset(entries) if reachable else None
+	# How many answers of "no such task" it takes to believe one. A job BV-BRC
+	# has no record of is never going to finish, so this is the one thing other
+	# than a failure status that ends a wait -- and with no clock behind it, it
+	# is also the only thing standing between a lost job and waiting forever.
+	# More than one, because a single odd response is not a job's obituary.
+	_MISSING_TASK_POLLS = 3
 
 	def wait_for_job(
 		self,
 		job_id: str,
-		max_wait_seconds: int = 10800,
 		poll_interval: int = 30,
-		output_paths: Optional[List[str]] = None,
-		max_total_seconds: Optional[int] = None,
 	) -> Tuple[bool, Optional[str]]:
 		"""
-		Poll job status until completion or timeout.
+		Poll job status until BV-BRC says the job is finished, one way or another.
 
-		``max_wait_seconds`` is time without progress, not time in total: whenever
-		a file appears (or grows) under ``output_paths``, the clock starts again.
-		A Comprehensive Genome Analysis writes its output over the course of the
-		run, so a job that is still delivering files is still working, and cutting
-		it off at a fixed wall-clock figure threw away an assembly that was
-		nearly done -- and left the sample failed with hours of BV-BRC compute
-		already spent on it. Without ``output_paths`` there is nothing to observe
-		and this degrades to the old fixed timeout.
-
-		``max_total_seconds`` bounds the whole wait regardless of progress, so a
-		job that keeps touching a log file forever cannot hold a pipeline slot
-		forever. None leaves it unbounded.
+		There is no time limit. How long a job takes is BV-BRC's queue plus
+		BV-BRC's compute, neither of which this end can predict, and every
+		deadline tried here has only ever managed to throw away a job that was
+		still working: a sample failed with hours of remote compute already spent
+		on it, on an afternoon their queue happened to be busy. So the wait ends
+		when the job ends -- 'completed', or a status that says it failed -- and a
+		long queue or a slow assembly is simply waited out. An explicit failure
+		comes back at once rather than hours later, which is what makes resubmitting
+		it worth doing (see run_job).
 
 		Args:
 		    job_id: BV-BRC job ID
-		    max_wait_seconds: Maximum time to wait for the next sign of progress
-		        (default: 3 hours)
 		    poll_interval: Seconds between polls (default: 30)
-		    output_paths: Workspace folders this job writes its results into
-		    max_total_seconds: Absolute ceiling on the whole wait, if any
 
 		Returns:
 		    Tuple of (is_complete, final_status)
 		"""
-		output_paths = list(output_paths or [])
 		start_time = time.time()
-		last_progress_time = start_time
-		last_fingerprint = self._output_fingerprint(output_paths) if output_paths else None
-		last_status = None
-
-		# Listing a workspace costs an RPC per folder in it, so it is not done on
-		# every poll: a dozen samples in flight, each walking two result trees
-		# every 30 seconds, is a lot of traffic to point at a shared public service
-		# to answer a question about a three-hour deadline. A tenth of the idle
-		# budget notices progress in good time, and a short wait still checks at
-		# its own poll interval.
-		last_check_time = start_time
-		progress_interval = max(poll_interval, min(300, max_wait_seconds / 10))
+		missing_polls = 0
 
 		while True:
-			now = time.time()
-			elapsed = now - start_time
-			idle = now - last_progress_time
+			elapsed = time.time() - start_time
 
-			if idle > max_wait_seconds:
-				logger.warning(
-					f"Job {job_id} returned no new files for {idle:.0f}s "
-					f"(limit {max_wait_seconds}s, {elapsed:.0f}s elapsed in total)"
-				)
-				return False, last_status
+			try:
+				job_info = self._query_task(job_id)
+			except Exception as exception:
+				# Says nothing about the job: a service we cannot reach is not a
+				# job that failed, and giving up here would fail samples for the
+				# duration of someone else's outage.
+				logger.warning(f"Could not reach BV-BRC to check job {job_id}: {exception}")
+				time.sleep(poll_interval)
+				continue
 
-			if max_total_seconds is not None and elapsed > max_total_seconds:
-				logger.warning(
-					f"Job {job_id} was still producing files but hit the absolute "
-					f"{max_total_seconds}s ceiling on how long one job may be waited on"
-				)
-				return False, last_status
-
-			job_info = self.get_job_status(job_id)
-
-			if job_info:
-				# query_tasks returns status: 'in-progress', 'completed', 'failed'
-				status = job_info.get("status", "unknown")
-				last_status = status
-
-				if status == "completed":
-					logger.info(f"✓ Job {job_id} completed")
-					return True, status
-
-				elif status == "failed":
-					logger.error(f"✗ Job {job_id} failed")
-					return False, status
-
-				else:
-					logger.info(
-						f"Job {job_id} status: {status} "
-						f"[{elapsed:.0f}s elapsed, {idle:.0f}s since the last file]"
+			if job_info is None:
+				missing_polls += 1
+				if missing_polls >= self._MISSING_TASK_POLLS:
+					logger.error(
+						f"✗ BV-BRC has no record of job {job_id} "
+						f"in {missing_polls} consecutive checks; treating it as lost"
 					)
+					return False, "missing"
+				logger.warning(f"Job {job_id} not found in BV-BRC's task list; checking again")
+				time.sleep(poll_interval)
+				continue
 
-			if output_paths and time.time() - last_check_time >= progress_interval:
-				last_check_time = time.time()
-				fingerprint = self._output_fingerprint(output_paths)
-				# Only a reading that succeeded can move the clock. A workspace we
-				# could not read is not evidence of progress, and neither is it
-				# evidence of a stall -- so it leaves the clock exactly where it was.
-				if fingerprint is not None:
-					if last_fingerprint is None or fingerprint != last_fingerprint:
-						if fingerprint:
-							logger.info(
-								f"Job {job_id} has returned {len(fingerprint)} file(s); "
-								f"restarting the {max_wait_seconds}s wait"
-							)
-							last_progress_time = time.time()
-					last_fingerprint = fingerprint
+			missing_polls = 0
+			# query_tasks returns status: 'queued', 'in-progress', 'completed', 'failed'
+			status = job_info.get("status", "unknown")
 
+			if status == "completed":
+				logger.info(f"✓ Job {job_id} completed after {elapsed:.0f}s")
+				return True, status
+
+			if status in self._TERMINAL_FAILURE_STATUSES:
+				logger.error(f"✗ Job {job_id} {status} after {elapsed:.0f}s")
+				return False, status
+
+			logger.info(f"Job {job_id} status: {status} [{elapsed:.0f}s elapsed]")
 			time.sleep(poll_interval)
+
+	def run_job(
+		self,
+		submit_job,
+		poll_interval: int = 30,
+		max_attempts: int = 3,
+		retry_delay: float = 60.0,
+		resume_job_id: Optional[str] = None,
+		on_submit=None,
+	) -> str:
+		"""
+		Submit a job, wait for it however long it takes, and resubmit it if BV-BRC
+		fails it.
+
+		This is the other half of an unbounded wait. Nothing here is now cut short
+		for taking too long, so the only thing that ends a sample badly is BV-BRC
+		reporting a failure -- and BV-BRC failures are frequently not about the
+		job: a scheduler hiccup, a node lost mid-assembly, an app service
+		restarted underneath a queued task. Those are worth another submission,
+		and the same failure arriving ``max_attempts`` times running is the sample's
+		answer.
+
+		A failed job cannot be resumed, so each attempt is a fresh submission with
+		a fresh job ID; ``on_submit`` is how a caller keeps its record of which one
+		is live (the CGA rule caches it, so a restarted pipeline rejoins the job
+		instead of starting a second copy of it).
+
+		Args:
+		    submit_job: Callable returning a new job ID, or None if BV-BRC
+		        refused the submission
+		    poll_interval: Seconds between polls
+		    max_attempts: How many submissions to make before giving up
+		    retry_delay: Seconds to wait before resubmitting after a failure
+		    resume_job_id: An already-running job to wait on instead of submitting
+		        the first attempt
+		    on_submit: Called with each new job ID as it is submitted
+
+		Returns:
+		    The job ID that completed
+
+		Raises:
+		    RuntimeError: If every attempt failed or was refused
+		"""
+		job_id = resume_job_id
+		last_status = None
+
+		for attempt in range(1, max_attempts + 1):
+			if job_id is None:
+				if attempt > 1 and retry_delay > 0:
+					logger.info(f"Resubmitting to BV-BRC in {retry_delay:.0f}s...")
+					time.sleep(retry_delay)
+
+				job_id = submit_job()
+				if not job_id:
+					job_id = None
+					last_status = "not submitted"
+					logger.error(
+						f"BV-BRC did not accept the job (attempt {attempt}/{max_attempts})"
+					)
+					continue
+				if on_submit:
+					on_submit(job_id)
+
+			is_complete, last_status = self.wait_for_job(job_id, poll_interval=poll_interval)
+			if is_complete:
+				return job_id
+
+			logger.warning(
+				f"BV-BRC job {job_id} ended as '{last_status}' "
+				f"(attempt {attempt}/{max_attempts})"
+			)
+			job_id = None
+
+		raise RuntimeError(
+			f"BV-BRC failed the job {max_attempts} times running "
+			f"(last: {last_status})"
+		)
 
 	def get_taxonomy_id(self, genus: str) -> Optional[int]:
 		"""
