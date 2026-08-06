@@ -56,11 +56,12 @@ Thumbs.db
 .bvbrc_token
 results/*/
 data/raw_fastq/
-# Per-job runtime state: sample manifests, checksums, endpoint overrides, and
-# BV-BRC tokens written under config/jobs/<JOB_ID>/ at upload/run time. The
-# .bvbrc_token rule above only matched the token by basename; the manifest and
-# overrides sitting next to it were untracked by any rule.
-config/jobs/
+# The whole of config/ is local now: config.yaml, samples.csv, checksums.json
+# and api_endpoints.json were purged from history, and the per-job runtime state
+# under config/jobs/<JOB_ID>/ (sample manifests, checksums, endpoint overrides,
+# BV-BRC tokens) was never meant to be tracked in the first place. Ignoring the
+# directory rather than its contents keeps any of it from being re-added.
+config/
 logs/
 *.txt.gz
 *.fastq.gz
