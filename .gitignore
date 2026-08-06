@@ -56,12 +56,20 @@ Thumbs.db
 .bvbrc_token
 results/*/
 data/raw_fastq/
-# The whole of config/ is local now: config.yaml, samples.csv, checksums.json
-# and api_endpoints.json were purged from history, and the per-job runtime state
+# config/ is local apart from config.yaml: samples.csv, checksums.json and
+# api_endpoints.json were purged from history, and the per-job runtime state
 # under config/jobs/<JOB_ID>/ (sample manifests, checksums, endpoint overrides,
-# BV-BRC tokens) was never meant to be tracked in the first place. Ignoring the
-# directory rather than its contents keeps any of it from being re-added.
-config/
+# BV-BRC tokens) was never meant to be tracked in the first place.
+#
+# config.yaml is the exception because the image cannot be built without it --
+# the Dockerfile COPYs it so Snakemake can parse it as configfile: at DAG time.
+# It carries pipeline settings only, no credentials.
+#
+# The contents are excluded rather than the directory itself, because git cannot
+# re-include a file whose parent directory is excluded: with `config/` here, the
+# negation below would silently do nothing and the build would break again.
+config/*
+!config/config.yaml
 logs/
 *.txt.gz
 *.fastq.gz

@@ -1,0 +1,111 @@
+# Bioinformatics Workflow Configuration
+# Automated genome analysis pipeline
+
+# Input/Output directories
+data_dir: "data/raw_fastq" # Location of paired-end FASTQ files (R1, R2)
+results_dir: "results" # Output directory for all results
+logs_dir: "logs" # Snakemake and tool logs
+
+# Sample manifest (CSV format)
+# Expected columns: isolate_id, R1_path, R2_path
+samples_manifest: "config/samples.csv"
+
+# BV-BRC Configuration
+bvbrc:
+    workspace_name: "bioinformatics_analysis"
+    api_base_url: "https://www.bv-brc.org/api"
+    # CLI fallback only. Web jobs override this with config/jobs/<job-id>/.bvbrc_token.
+    token_file: ".bvbrc_token"
+
+    # Comprehensive Genome Analysis parameters
+    assembly_method: "auto" # Options: auto (Unicycler), spades, kmer
+    organism_type: "bacteria"
+
+    # Job polling settings
+    poll_interval: 30 # seconds between status checks
+    # There is no time limit on a BV-BRC job. How long one takes is their queue
+    # plus their compute, and a deadline here only ever managed to throw away
+    # jobs that were still working -- a busy afternoon on a shared public service
+    # is not a failed sample. A job is waited on until BV-BRC says it finished.
+    #
+    # What ends a sample badly is BV-BRC reporting a failure, and those are often
+    # BV-BRC's rather than the sample's (a lost node, a restarted app service),
+    # so a failed job is resubmitted from scratch this many times before the
+    # sample is given up on.
+    max_job_attempts: 3
+    retry_delay: 60 # seconds before resubmitting a failed job
+
+# CARD RGI Configuration
+card:
+    output_format: "json" # json or txt
+    include_loose: false # Include loose hits
+
+# BLAST Configuration
+# Remote BLASTP of the resistance enzymes against NCBI nr: confirm global
+# novelty (no 100% match anywhere) and infer plasmid vs chromosome from the top
+# hits. NOT a re-BLAST against local CARD -- RGI already compared each hit
+# against CARD internally.
+blast:
+    # Tier 1: the local AMR catalog (NCBI AMRFinderPlus AMRProt, ~10k proteins, ~5 MB),
+    # downloaded and formatted by workflow/scripts/build_amr_blastdb.py. Searched first,
+    # and it answers almost everything in about a minute.
+    local_db_dir: "resources/blastdb/amr"
+    local_db_name: "AMRProt"
+    # Threads for the local blastp. An upper bound, not a demand: the rule clamps this
+    # to half the box's cores, because the same rule can then sit 30 minutes waiting on
+    # NCBI while holding them (see rules/blast.smk). On 2 cores it resolves to 1.
+    threads: 4
+    amr_catalog_url: "https://ftp.ncbi.nlm.nih.gov/pathogen/Antimicrobial_resistance/AMRFinderPlus/database/latest"
+
+    # Tier 2: NCBI, for the enzymes the catalog could not name -- the genuinely novel
+    # ones. Remote BLAST is queue-bound, not size-bound (a 216-protein and a 15-protein
+    # nr search both took 30 minutes to time out and return nothing), so it is worth
+    # waiting on only for the few queries the local database could not resolve.
+    database: "nr" # NCBI database for the remote fallback
+    remote_fallback: true # false = local only; unmatched enzymes are reported as unresolved
+    remote_timeout_seconds: 1800
+
+    evalue_threshold: 1e-5
+    max_target_seqs: 50
+    max_query_proteins: 15 # cap on enzymes searched per sample, most-novel-first (lowest CARD identity).
+    # The cap now bounds the remote fallback, not the local search: the local catalog
+    # handles the full enzyme set (221 proteins) in ~60s, so raise or zero this out if
+    # you want every enzyme covered -- the cost is only in what falls through to NCBI.
+    mechanism_filter: "antibiotic inactivation" # which RGI hits to BLAST (the tutorial's focus)
+
+# MLST Configuration
+mlst:
+    scheme: "auto" # Auto-detect species
+    ignore_missing: true
+
+# MobileElementFinder Configuration (known mobile-element catalog)
+# DTU CGE `mefinder`: aligns each assembly against MGEdb to catalog known MGEs
+# (insertion sequences, transposons, MITEs, ICEs, ...). No reference genome needed.
+# The db comes from PyPI at env-build time (see workflow/envs/mefinder.yml), so
+# rebuilds track the latest released MGEdb -- no static local db clone.
+mobile_elements:
+    threads: 4
+    # An antibiotic-resistance gene is called "mobile-element linked" when it
+    # overlaps a detected MGE or sits within this many bp of one on the same
+    # contig
+    colocation_proximity_bp: 5000
+
+# Resource limits
+resources:
+    max_parallel_samples: 4 # Process up to 4 genomes in parallel
+    memory_per_job_gb: 8
+    timeout_minutes: 180
+
+# Advanced options
+advanced:
+    skip_md5_check: false
+    verbose_logging: true
+    dry_run: false
+
+# Output report settings
+report:
+    html_template: true
+    include_phylogeny: true
+    novelty_thresholds:
+        coverage_min_pct: 80
+        identity_min_pct: 95 # < 95% identity = potentially novel variant
