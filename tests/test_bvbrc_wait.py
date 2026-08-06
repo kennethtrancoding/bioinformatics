@@ -1,13 +1,14 @@
-"""Waiting on a BV-BRC job: when to keep waiting, and when to give up.
+"""Waiting on a BV-BRC job: what ends the wait, and what happens next.
 
-The timeout is what decides whether a sample that BV-BRC is still working on
-comes back as an assembly or as a failure, and the sample has hours of remote
-compute behind it by the time the question is asked. So what is pinned here is
-the rule itself: the clock measures time since the last file BV-BRC returned, not
-time since submission, and a job still delivering output is never cut off.
+Nothing here is on a clock. A job's runtime is BV-BRC's queue plus BV-BRC's
+compute, and every deadline this pipeline has tried only ever managed to throw
+away jobs that were still working -- a sample failed with hours of remote compute
+already spent on it. So what is pinned here is the rule that replaced it: a job is
+waited on until BV-BRC says it finished, and a job BV-BRC says it failed is
+resubmitted rather than losing the sample to a failure that was probably theirs.
 
-No network and no waiting: get_job_status and the workspace listing are supplied
-by the test, and time is a counter that only advances when the poll loop sleeps.
+No network and no waiting: the task query is supplied by the test, and time is a
+counter that only advances when the poll loop sleeps.
 """
 
 import inspect
@@ -18,12 +19,8 @@ from tests._isolation import TMP_ROOT  # noqa: F401  (must import first)
 from workflow.helpers import bvbrc_client  # noqa: E402
 from workflow.helpers.bvbrc_client import BVBRCClient  # noqa: E402
 
-OUTPUT_PATH = "/user@bvbrc/home/ws/cga_SAMPLE"
-
-
-def _files_so_far(count):
-	"""The job's output after it has written `count` files, as (name, size) pairs."""
-	return [(f"f{index}.fa", 1) for index in range(count)]
+OLD_IDLE_LIMIT = 3 * 60 * 60
+OLD_TOTAL_CEILING = 12 * 60 * 60
 
 
 class FakeClock:
@@ -40,28 +37,24 @@ class FakeClock:
 
 
 class Poller:
-	"""One scripted poll loop: what each poll sees, in order.
+	"""One scripted poll loop: what each status check comes back with, in order.
 
-	Each entry is (status, workspace_files); the last entry repeats forever, so a
-	test that means "and then nothing ever changes again" says exactly that.
+	An entry is a status string, None for "BV-BRC has no such task", or an
+	exception to raise as if the service could not be reached. The last entry
+	repeats forever, so a test that means "and then nothing ever changes again"
+	says exactly that.
 	"""
 
 	def __init__(self, script):
-		self.script = script
+		self.script = list(script)
 		self.polls = 0
 
-	def _current(self):
-		return self.script[min(self.polls, len(self.script) - 1)]
-
-	def status(self, job_id):
+	def query(self, job_id):
+		entry = self.script[min(self.polls, len(self.script) - 1)]
 		self.polls += 1
-		return {"status": self._current()[0]}
-
-	def files(self, base_path, max_depth=3):
-		return [
-			{"name": name, "type": "unspecified", "path": f"{base_path}/{name}", "size": size}
-			for name, size in self._current()[1]
-		]
+		if isinstance(entry, Exception):
+			raise entry
+		return None if entry is None else {"status": entry}
 
 
 class WaitBase(unittest.TestCase):
@@ -75,121 +68,179 @@ class WaitBase(unittest.TestCase):
 
 	def wait(self, script, **kwargs):
 		poller = Poller(script)
-		self.client.get_job_status = poller.status
-		self.client.walk_workspace = poller.files
-		kwargs.setdefault("output_paths", [OUTPUT_PATH])
-		kwargs.setdefault("max_wait_seconds", 3600)
+		self.client._query_task = poller.query
 		kwargs.setdefault("poll_interval", 30)
 		started_at = self.clock.now
 		result = self.client.wait_for_job("42", **kwargs)
 		return result, self.clock.now - started_at
 
 
-class TestWaitResetsOnReturnedFiles(WaitBase):
-	def test_the_default_wait_is_three_hours(self):
-		"""Not a preference: it is the figure config/config.yaml and the README
-		both quote, and the poll loop is where it actually takes effect."""
-		default_wait = inspect.signature(BVBRCClient.wait_for_job).parameters["max_wait_seconds"]
-		self.assertEqual(default_wait.default, 3 * 60 * 60)
+class TestTheWaitHasNoLimit(WaitBase):
+	def test_the_wait_takes_no_deadline_at_all(self):
+		"""Not a generous default -- there is no knob. Any figure here is a guess
+		at BV-BRC's queue depth, and being wrong costs a finished assembly."""
+		parameters = set(inspect.signature(BVBRCClient.wait_for_job).parameters)
+		self.assertEqual(parameters, {"self", "job_id", "poll_interval"})
 
-	def test_a_job_that_returns_nothing_times_out_on_the_idle_limit(self):
-		(complete, status), elapsed = self.wait(
-			[("in-progress", [])], max_wait_seconds=600, poll_interval=30
-		)
-		self.assertFalse(complete)
-		self.assertEqual(status, "in-progress")
-		self.assertLess(elapsed, 700, "the wait must end shortly after the idle limit")
-
-	def test_a_file_arriving_restarts_the_clock(self):
-		"""The whole point: at 20 polls the job has been running for twice the
-		limit, and every one of those polls brought back another file. The old
-		fixed timeout failed this sample with the assembly nearly done."""
-		script = [("in-progress", [(f"contig_{index}.fa", 100)]) for index in range(20)]
-		script.append(("completed", [("contigs.fa", 100)]))
-		(complete, status), elapsed = self.wait(script, max_wait_seconds=300, poll_interval=30)
+	def test_a_job_is_waited_on_however_long_it_takes(self):
+		"""Eight hours queued and eight hours running, returning nothing at all
+		until it finishes. Both of the limits this replaced would have failed it:
+		the idle one at three hours, the absolute one at twelve."""
+		script = ["queued"] * 1000 + ["in-progress"] * 1000 + ["completed"]
+		(complete, status), elapsed = self.wait(script)
 		self.assertTrue(complete)
 		self.assertEqual(status, "completed")
-		self.assertGreater(elapsed, 300, "this job outlived the idle limit several times over")
+		self.assertGreater(elapsed, OLD_TOTAL_CEILING)
 
-	def test_a_file_that_is_still_growing_counts_as_progress(self):
-		"""One file, written slowly, is a job that is working -- and the only sign
-		of it is the size. Without that, a long single-file write reads as a stall."""
-		script = [("in-progress", [("assembly.fa", size)]) for size in range(1, 30)]
-		script.append(("completed", [("assembly.fa", 30)]))
-		(complete, _), _ = self.wait(script, max_wait_seconds=300, poll_interval=30)
+	def test_a_silent_job_is_waited_on_too(self):
+		"""A job returning no files is no longer evidence of anything: what the
+		old idle clock actually caught, most of the time, was a long queue."""
+		script = ["in-progress"] * 500 + ["completed"]
+		(complete, _), elapsed = self.wait(script)
 		self.assertTrue(complete)
+		self.assertGreater(elapsed, OLD_IDLE_LIMIT)
 
-	def test_a_job_that_stops_delivering_still_times_out(self):
-		"""Progress buys time; it does not buy forever. Ten files arrive, then the
-		job stalls, and the wait ends an idle limit after the last of them."""
-		script = [("in-progress", _files_so_far(count)) for count in range(1, 11)]
-		script.append(("in-progress", _files_so_far(10)))  # and nothing more, ever
-		(complete, status), elapsed = self.wait(script, max_wait_seconds=300, poll_interval=30)
-		self.assertFalse(complete)
-		self.assertEqual(status, "in-progress")
-		self.assertLess(elapsed, 10 * 30 + 400)
+	def test_an_unrecognised_status_is_not_a_failure(self):
+		"""BV-BRC's statuses are theirs to add to. Anything that is not a failure
+		is a job that has not finished, and is waited on."""
+		(complete, status), _ = self.wait(["init", "pending", "running", "completed"])
+		self.assertTrue(complete)
+		self.assertEqual(status, "completed")
 
-	def test_the_absolute_ceiling_ends_a_job_that_never_stops_writing(self):
-		"""A job touching a log file every 30 seconds would otherwise hold a BV-BRC
-		slot for as long as BV-BRC let it."""
-		script = [("in-progress", _files_so_far(count)) for count in range(1, 501)]
-		(complete, _), elapsed = self.wait(
-			script, max_wait_seconds=300, poll_interval=30, max_total_seconds=1800
-		)
-		self.assertFalse(complete)
-		self.assertLessEqual(elapsed, 1800 + 30)
+	def test_an_unreachable_service_does_not_end_the_wait(self):
+		"""Not an answer about the job. Giving up here would fail every sample in
+		flight for the duration of someone else's outage."""
+		script = [RuntimeError("service unavailable")] * 100 + ["completed"]
+		(complete, status), _ = self.wait(script)
+		self.assertTrue(complete)
+		self.assertEqual(status, "completed")
 
-	def test_a_long_wait_does_not_relist_the_workspace_on_every_poll(self):
-		"""Each listing is an RPC per folder in the result tree, against a shared
-		public service, for a dozen samples at once. A three-hour deadline does not
-		need answering every thirty seconds, so the check runs at a tenth of it."""
-		listings = []
-		poller = Poller([("in-progress", [("f.fa", 1)])])
-		self.client.get_job_status = poller.status
-		self.client.walk_workspace = lambda path, max_depth=3: (
-			listings.append(path) or poller.files(path, max_depth)
-		)
-		self.client.wait_for_job(
-			"42",
-			max_wait_seconds=10800,
-			poll_interval=30,
-			output_paths=[OUTPUT_PATH],
-			max_total_seconds=3600,
-		)
-		self.assertGreaterEqual(poller.polls, 120, "an hour of polling, every 30 seconds")
-		self.assertLessEqual(len(listings), 15, "an hour of listings, every 5 minutes")
 
-	def test_a_failed_job_is_not_waited_on(self):
-		(complete, status), elapsed = self.wait([("failed", [])])
+class TestWhatEndsTheWait(WaitBase):
+	def test_a_failed_job_ends_the_wait_at_once(self):
+		(complete, status), elapsed = self.wait(["failed"])
 		self.assertFalse(complete)
 		self.assertEqual(status, "failed")
 		self.assertEqual(elapsed, 0)
 
-	def test_an_unreadable_workspace_neither_starts_nor_stops_the_clock(self):
-		"""A listing that errors says nothing about the job: it is not progress,
-		and it is not a stall either. The wait ends on the idle limit exactly as
-		if the workspace had been readable and empty."""
+	def test_the_other_ways_bvbrc_ends_a_job_also_end_the_wait(self):
+		for status_name in ("deleted", "terminated", "cancelled", "killed"):
+			with self.subTest(status=status_name):
+				(complete, status), elapsed = self.wait([status_name])
+				self.assertFalse(complete)
+				self.assertEqual(status, status_name)
+				self.assertEqual(elapsed, 0)
 
-		def unreadable(base_path, max_depth=3):
-			raise RuntimeError("workspace unreachable")
+	def test_a_job_bvbrc_has_lost_ends_the_wait(self):
+		"""The one stopping condition that is not a status. With no clock behind
+		it, this is all that stands between a job BV-BRC has forgotten and a poll
+		loop that runs until someone kills the pipeline."""
+		(complete, status), elapsed = self.wait([None])
+		self.assertFalse(complete)
+		self.assertEqual(status, "missing")
+		self.assertLess(elapsed, 5 * 30, "a lost job is not waited out")
 
-		poller = Poller([("in-progress", [])])
-		self.client.get_job_status = poller.status
-		self.client.walk_workspace = unreadable
+	def test_one_odd_answer_is_not_a_lost_job(self):
+		"""A single response that omits the task is not a job's obituary."""
+		(complete, status), _ = self.wait([None, "in-progress", "completed"])
+		self.assertTrue(complete)
+		self.assertEqual(status, "completed")
+
+
+class Attempts:
+	"""A scripted run of run_job: what each submission hands back, and how each
+	wait on it ends."""
+
+	def __init__(self, waits, submissions=None):
+		self.waits = list(waits)
+		self.submissions = submissions
+		self.submitted = []
+		self.announced = []
+		self.waited = []
+
+	def submit(self):
+		index = len(self.submitted)
+		job_id = self.submissions[index] if self.submissions else f"job-{index + 1}"
+		self.submitted.append(job_id)
+		return job_id
+
+	def announce(self, job_id):
+		self.announced.append(job_id)
+
+	def wait(self, job_id, poll_interval=30):
+		status = self.waits[min(len(self.waited), len(self.waits) - 1)]
+		self.waited.append(job_id)
+		return status == "completed", status
+
+
+class TestResubmittingAFailedJob(WaitBase):
+	def run_job(self, attempts, **kwargs):
+		self.client.wait_for_job = attempts.wait
+		kwargs.setdefault("retry_delay", 60)
+		kwargs.setdefault("max_attempts", 3)
+		return self.client.run_job(attempts.submit, on_submit=attempts.announce, **kwargs)
+
+	def test_a_failed_job_is_resubmitted(self):
+		"""The trade the removed timeout was paying for: with nothing cut short
+		for being slow, a reported failure is the only thing that loses a sample --
+		and BV-BRC's failures are often BV-BRC's, not the sample's."""
+		attempts = Attempts(["failed", "completed"])
+		self.assertEqual(self.run_job(attempts), "job-2")
+		self.assertEqual(attempts.submitted, ["job-1", "job-2"])
+
+	def test_a_lost_job_is_resubmitted_the_same_way(self):
+		attempts = Attempts(["missing", "completed"])
+		self.assertEqual(self.run_job(attempts), "job-2")
+
+	def test_a_job_that_completes_is_not_resubmitted(self):
+		attempts = Attempts(["completed"])
+		self.assertEqual(self.run_job(attempts), "job-1")
+		self.assertEqual(attempts.submitted, ["job-1"])
+
+	def test_the_caller_is_told_every_job_id_as_it_is_submitted(self):
+		"""How the CGA rule's cached job ID follows the live job. Left pointing at
+		the failed attempt, a restart would rejoin a job that is already dead."""
+		attempts = Attempts(["failed", "completed"])
+		self.run_job(attempts)
+		self.assertEqual(attempts.announced, ["job-1", "job-2"])
+
+	def test_the_same_failure_three_times_running_is_the_answer(self):
+		"""Retrying is for BV-BRC's failures. A job that fails every time it is
+		submitted is the sample's problem, and the sample fails."""
+		attempts = Attempts(["failed"])
+		with self.assertRaises(RuntimeError) as raised:
+			self.run_job(attempts, max_attempts=3)
+		self.assertIn("failed", str(raised.exception))
+		self.assertEqual(len(attempts.submitted), 3)
+
+	def test_a_resubmission_waits_first(self):
+		"""Straight back into a queue that just failed the job is not a retry."""
+		attempts = Attempts(["failed"])
 		started_at = self.clock.now
-		complete, _ = self.client.wait_for_job(
-			"42", max_wait_seconds=600, poll_interval=30, output_paths=[OUTPUT_PATH]
-		)
-		self.assertFalse(complete)
-		self.assertLess(self.clock.now - started_at, 700)
+		with self.assertRaises(RuntimeError):
+			self.run_job(attempts, max_attempts=3, retry_delay=60)
+		self.assertEqual(self.clock.now - started_at, 120, "a delay between attempts, not before")
 
-	def test_without_output_paths_it_is_the_old_fixed_timeout(self):
-		script = [("in-progress", [(f"f{index}.fa", 1)]) for index in range(100)]
-		(complete, _), elapsed = self.wait(
-			script, output_paths=None, max_wait_seconds=600, poll_interval=30
-		)
-		self.assertFalse(complete)
-		self.assertLess(elapsed, 700)
+	def test_a_refused_submission_counts_as_an_attempt(self):
+		"""BV-BRC declining to take the job at all is a failure like any other,
+		and must not become a submission loop with nothing to wait on."""
+		attempts = Attempts(["completed"], submissions=[None, None, None])
+		with self.assertRaises(RuntimeError):
+			self.run_job(attempts, max_attempts=3)
+		self.assertEqual(len(attempts.submitted), 3)
+		self.assertEqual(attempts.waited, [])
+
+	def test_a_resumed_job_is_waited_on_rather_than_duplicated(self):
+		"""A restarted pipeline rejoins the assembly BV-BRC is already running."""
+		attempts = Attempts(["completed"])
+		self.assertEqual(self.run_job(attempts, resume_job_id="cached-7"), "cached-7")
+		self.assertEqual(attempts.submitted, [])
+		self.assertEqual(attempts.waited, ["cached-7"])
+
+	def test_a_resumed_job_that_fails_is_resubmitted(self):
+		attempts = Attempts(["failed", "completed"])
+		self.assertEqual(self.run_job(attempts, resume_job_id="cached-7"), "job-1")
+		self.assertEqual(attempts.waited, ["cached-7", "job-1"])
 
 
 if __name__ == "__main__":

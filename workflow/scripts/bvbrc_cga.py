@@ -21,8 +21,6 @@ assembly_fasta = snakemake.output.assembly_fasta
 genome_report = snakemake.output.genome_report
 full_report = snakemake.output.full_report
 cga_raw_dir = snakemake.output.cga_raw_dir
-max_wait = snakemake.params.max_wait_time
-max_total_wait = getattr(snakemake.params, "max_total_wait_time", None)
 
 Path(assembly_fasta).parent.mkdir(parents=True, exist_ok=True)
 
@@ -44,8 +42,7 @@ client.workspace = workspace
 
 # Where this job's output lands. BV-BRC writes CGA results into the job's output
 # folder and into a dot-prefixed sibling of it, and which one gets what varies by
-# recipe -- so both are watched while the job runs (each file that appears there
-# restarts the wait) and both are walked for the results afterwards.
+# recipe -- so both are walked for the results when the job completes.
 output_name = f"cga_{sample_id}"
 result_roots = [
 	f"{workspace}/{output_name}",
@@ -61,48 +58,54 @@ with open(snakemake.output.taxonomy_lookup, "w") as file_handle:
 
 # Re-use an already-running job if recorded (avoids duplicate submissions on restart)
 job_cache = Path(assembly_fasta).parent / "cga_job_id.txt"
-job_id = None
+resume_job_id = None
 if job_cache.exists():
 	with open(job_cache) as file_handle:
 		cached_id = file_handle.read().strip()
 	status_info = client.get_job_status(cached_id)
 	if status_info and status_info.get("status") not in ("failed", None):
-		job_id = cached_id
-		logger.info(f"Resuming existing CGA job: {job_id} (status: {status_info.get('status')})")
+		resume_job_id = cached_id
+		logger.info(
+			f"Resuming existing CGA job: {resume_job_id} (status: {status_info.get('status')})"
+		)
 
-if not job_id:
-	assembly_method = snakemake.config["bvbrc"]["assembly_method"]
 
+def submit_cga():
 	params = {
 		"r1_file": r1_remote,
 		"r2_file": r2_remote,
 		"output_name": output_name,
 		"taxonomy_id": taxonomy_id,
-		"assembly_method": assembly_method,
+		"assembly_method": snakemake.config["bvbrc"]["assembly_method"],
 	}
 
 	if genus != "Unknown":
 		params["genus"] = genus
 
-	job_id = client.submit_comprehensive_genome_analysis(**params)
-	if not job_id:
-		raise RuntimeError("Failed to submit Comprehensive Genome Analysis job")
+	return client.submit_comprehensive_genome_analysis(**params)
+
+
+def remember_job(new_job_id):
+	"""Record the live job ID, so a restart rejoins this assembly rather than
+	starting a second copy of it -- including after a resubmission, where the
+	cached ID from the failed attempt is now the wrong one to rejoin."""
+	logger.info(f"Job ID: {new_job_id}")
 	with open(job_cache, "w") as file_handle:
-		file_handle.write(job_id)
+		file_handle.write(new_job_id)
 
-logger.info(f"Job ID: {job_id}")
 
-poll_interval = snakemake.config["bvbrc"]["poll_interval"]
-is_complete, final_status = client.wait_for_job(
-	job_id,
-	max_wait_seconds=max_wait,
-	poll_interval=poll_interval,
-	output_paths=result_roots,
-	max_total_seconds=max_total_wait,
+# No deadline: the job is waited on for as long as BV-BRC runs it. What ends this
+# badly is BV-BRC failing the job, and a failure is often BV-BRC's rather than the
+# sample's, so it is resubmitted before the sample is given up on.
+bvbrc_config = snakemake.config["bvbrc"]
+job_id = client.run_job(
+	submit_cga,
+	poll_interval=bvbrc_config["poll_interval"],
+	max_attempts=bvbrc_config.get("max_job_attempts", 3),
+	retry_delay=bvbrc_config.get("retry_delay", 60),
+	resume_job_id=resume_job_id,
+	on_submit=remember_job,
 )
-
-if not is_complete:
-	raise RuntimeError(f"CGA job failed or timed out: {final_status}")
 
 logger.info("Comprehensive Genome Analysis complete")
 
