@@ -32,6 +32,7 @@ stylistic preference. The same fallback blocks external stylesheets, fonts and
 images, so everything here is one inline <style> and a system font stack.
 """
 
+import csv
 import re
 from pathlib import Path
 
@@ -50,7 +51,7 @@ from report_format import (
 	table,
 )
 from report_io import read_csv_rows, read_json
-from rgi_json import iter_best_hits
+from rgi_json import iter_best_hits, load_tab_report, tab_row_for_hit
 
 
 def _inputs_from_sample_dir(sample_dir, report_out=None):
@@ -70,6 +71,7 @@ def _inputs_from_sample_dir(sample_dir, report_out=None):
 		"rgi_file": str(sample_dir / "03_resistance" / "rgi_results.csv"),
 		"rgi_json_file": str(sample_dir / "03_resistance" / "rgi_results.json"),
 		"blast_file": str(sample_dir / "04_blast" / "blast_results.csv"),
+		"blast_full_file": str(sample_dir / "04_blast" / "blast_results_full.tsv"),
 		"mlst_file": str(sample_dir / "05_mlst" / "mlst_results.json"),
 		"rmlst_raw_file": str(sample_dir / "05_mlst" / "rmlst_raw.json"),
 		"mobile_element_finder_file": str(sample_dir / "06_mobile_elements" / "me_summary.csv"),
@@ -93,6 +95,7 @@ if "snakemake" in globals():
 		"rgi_file": snakemake.input.rgi,
 		"rgi_json_file": snakemake.input.rgi_json,
 		"blast_file": snakemake.input.blast,
+		"blast_full_file": snakemake.input.blast_full,
 		"mlst_file": snakemake.input.mlst,
 		"rmlst_raw_file": snakemake.input.rmlst_raw,
 		"mobile_element_finder_file": snakemake.input.mobile_element_finder,
@@ -119,6 +122,7 @@ card_file = _paths["card_file"]
 rgi_file = _paths["rgi_file"]
 rgi_json_file = _paths["rgi_json_file"]
 blast_file = _paths["blast_file"]
+blast_full_file = _paths["blast_full_file"]
 mlst_file = _paths["mlst_file"]
 rmlst_raw_file = _paths["rmlst_raw_file"]
 mobile_element_finder_file = _paths["mobile_element_finder_file"]
@@ -127,6 +131,50 @@ colocation_file = _paths["colocation_file"]
 colocation_calls_file = _paths["colocation_calls_file"]
 
 Path(report_file).parent.mkdir(parents=True, exist_ok=True)
+
+
+def _blast_hsp_index(input_path):
+	"""qid -> every HSP row blast_ncbi_novelty recorded for it, from the raw
+	per-HSP tabular output (blast_results_full.tsv, blastp outfmt 6).
+
+	blast_results.csv keeps only the single best hit per enzyme (by identity
+	then coverage -- see blast_ncbi.parse_blast_tab), which is enough for the
+	novelty/location call but drops bitscore and evalue entirely. Max Score,
+	Total Score and E value only exist here. On a failed BLAST run the first
+	line is `# <failure note>`, not the header, so that line is dropped the
+	same way mefinder's and RGI's comment-prefixed outputs are."""
+	path = Path(input_path)
+	if not input_path or not path.is_file():
+		return {}
+	with path.open() as file_handle:
+		data_lines = [line for line in file_handle if not line.startswith("#")]
+	if not data_lines:
+		return {}
+	index = {}
+	for row in csv.DictReader(data_lines, delimiter="\t"):
+		index.setdefault(row.get("qseqid", ""), []).append(row)
+	return index
+
+
+def _blast_hsp_stats(hsp_index, qid, accession):
+	"""(max_score, total_score, evalue) for the HSP(s) blast_results.csv's
+	winning `accession` recorded against query `qid`, or (None, None, None).
+
+	Total Score sums bitscore across every HSP sharing (qid, accession) --
+	multiple non-overlapping local alignments to the same subject, which BLAST's
+	own results page also totals this way. Max Score/E value come from the
+	single best-scoring one of those HSPs."""
+	rows = [row for row in hsp_index.get(qid, []) if row.get("sacc") == accession]
+	if not rows:
+		return None, None, None
+	try:
+		best_row = max(rows, key=lambda row: float(row.get("bitscore") or 0))
+		max_score = best_row.get("bitscore")
+		evalue = best_row.get("evalue")
+		total_score = sum(float(row.get("bitscore") or 0) for row in rows)
+	except (TypeError, ValueError):
+		return None, None, None
+	return max_score, total_score, evalue
 
 
 def _rgi_sequence_index(input_path):
@@ -180,11 +228,25 @@ mlst_result_data = read_json(mlst_file)
 rmlst_raw = read_json(rmlst_raw_file)
 rgi_hits = read_csv_rows(rgi_file)
 rgi_sequences = _rgi_sequence_index(rgi_json_file)
+# SNPs_in_Best_Hit_ARO has no JSON equivalent -- it exists only in `rgi main`'s
+# tab report, alongside Percentage Length of Reference Sequence (see
+# rgi_json.TAB_COVERAGE_COLUMN). Same tolerant-of-missing behaviour: {} when
+# the tab report isn't there.
+rgi_tab_index = load_tab_report(rgi_json_file)
 blast_hits = read_csv_rows(blast_file)
+blast_hsp_index = _blast_hsp_index(blast_full_file)
 mge_calls = read_csv_rows(mge_calls_file)
 mef_summary_rows = read_csv_rows(mobile_element_finder_file)
 colocation = read_json(colocation_file)
 colocation_calls = read_csv_rows(colocation_calls_file)
+
+
+def _rmlst_exact_match_total(exact_matches):
+	"""Total exact-match count, the way PubMLST's own "N exact matches found"
+	banner counts it: one genome can carry two copies of a ribosomal locus (seen
+	on different contigs), and PubMLST counts both. len(exact_matches) instead
+	counts locus keys, so it silently drops any duplicate/paralogous hit."""
+	return sum(len(matches or []) for matches in exact_matches.values())
 
 
 def _contig_token(contig_name):
@@ -301,12 +363,12 @@ def _summary_panel():
 
 	rst = (rmlst_raw.get("fields") or {}).get("rST")
 	if rst:
-		loci_matched = len(rmlst_raw.get("exact_matches") or {})
+		exact_match_total = _rmlst_exact_match_total(rmlst_raw.get("exact_matches") or {})
 		rows.append(
 			(
 				"Ribosomal ST",
 				f"rST {escape_html(rst)}<br><small>MLST "
-				f"{loci_matched}/53 ribosomal loci matched</small>",
+				f"{exact_match_total} exact matches</small>",
 			)
 		)
 
@@ -416,47 +478,56 @@ def _pairwise_alignment(hit, width=60):
 
 
 def _card_panel():
-	"""RGI's vocabulary, not ours: the columns a CARD user already knows.
+	"""RGI's vocabulary, not ours: the exact columns and order of `rgi main`'s
+	own results table (RGI Criteria / ARO Term / SNP / Detection Criteria / AMR
+	Gene Family / Drug Class / Resistance Mechanism / % Identity of Matching
+	Region / % Length of Reference Sequence / AST Source).
 
-	RGI blasts each predicted ORF protein from the assembly against CARD's
-	reference proteins, so every row is one such query. The queries are numbered
-	Query 1..N and listed at the top, and each row carries the inputted predicted
-	protein (the ORF) beside the CARD database protein it matched, with the
-	percent identity between the two."""
+	SNP (SNPs_in_Best_Hit_ARO) has no JSON equivalent -- only rgi main's tab
+	report carries it, joined in below the same way rgi_json_to_csv.py joins
+	Percentage Length of Reference Sequence. Detection Criteria (model_type) and
+	AST Source (ast_source) do live in the JSON, keyed by orf_id via
+	rgi_sequences -- the same index the sequence-alignment section below uses."""
 	if not rgi_hits:
 		return empty("No resistance gene hits.")
 	if "best_hit_aro" not in rgi_hits[0]:
 		return generic_table(rgi_hits, caption=f"RGI hits ({len(rgi_hits)})")
 
-	# What protein each numbered query is: Query N -> the CARD gene it matche
-
 	rows = []
-	for index, rgi_hit in enumerate(rgi_hits, start=1):
+	for rgi_hit in rgi_hits:
+		hit_json = rgi_sequences.get(rgi_hit.get("orf_id", ""), {})
+		tab_row = tab_row_for_hit(rgi_tab_index, hit_json) if hit_json else {}
+		aro_accession = rgi_hit.get("aro_accession", "")
+		aro_term = f"<strong>{escape_html(rgi_hit.get('best_hit_aro', ''))}</strong>"
+		if aro_accession:
+			aro_term += f'<br><small>ARO:{escape_html(aro_accession)}</small>'
 		# Perfect / Strict / Loose are RGI's own detection paradigms.
 		rows.append(
 			[
-				f"<span>{index}</span>",
-				f'<span class="mono wrap">{escape_html(rgi_hit.get("orf_id", "") or MISSING)}</span>',
-				f"<strong>{escape_html(rgi_hit.get('best_hit_aro', ''))}</strong>",
-				f"<span>ARO:{escape_html(rgi_hit.get('aro_accession', ''))}</span>",
 				escape_html(rgi_hit.get("cut_off", "")),
-				percent(rgi_hit.get("percent_identity")),
+				aro_term,
+				escape_html(tab_row.get("SNPs_in_Best_Hit_ARO", "")) or MISSING,
+				escape_html(hit_json.get("model_type", "")) or MISSING,
+				f'<span class="wrap">{escape_html(rgi_hit.get("amr_gene_family", ""))}</span>',
 				f'<span class="wrap">{escape_html(rgi_hit.get("drug_class", ""))}</span>',
 				escape_html(rgi_hit.get("resistance_mechanism", "")),
-				f'<span class="wrap">{escape_html(rgi_hit.get("amr_gene_family", ""))}</span>',
+				number(rgi_hit.get("percent_identity"), 2),
+				number(rgi_hit.get("percent_coverage"), 2),
+				escape_html(hit_json.get("ast_source", "")) or MISSING,
 			]
 		)
 	table_html = table(
 		[
-			"Query",
-			"ORF id",
-			"CARD reference (Best_Hit_ARO)",
-			"ARO",
-			"Cut_Off",
-			"Best_Identities",
+			"RGI Criteria",
+			"ARO Term",
+			"SNP",
+			"Detection Criteria",
+			"AMR Gene Family",
 			"Drug Class",
 			"Resistance Mechanism",
-			"AMR Gene Family",
+			"% Identity of Matching Region",
+			"% Length of Reference Sequence",
+			"AST Source",
 		],
 		rows,
 		caption=f"RGI hits ({len(rows)})",
@@ -504,7 +575,15 @@ def _card_panel():
 
 
 def _blast_panel():
-	"""NCBI's result vocabulary: Description / Query Cover / Per. Ident / Accession."""
+	"""NCBI's own results-page column order: Accession / Max Score / Total Score
+	/ Query Cover / E value / Per. Ident, plus the columns that carry this
+	pipeline's actual analysis (CARD Ident, Database, Location/novelty) and have
+	no NCBI equivalent. Cluster Composition/Ancestor/Representative Sequence and
+	Acc. Len are NCBI website-only or not requested from blastp at all, so there
+	is nothing to render them from -- omitted rather than faked.
+
+	Max Score/Total Score/E value come from blast_results_full.tsv, the raw
+	per-HSP output -- blast_results.csv (a best-hit summary) never carried them."""
 	if not blast_hits:
 		return empty("No BLAST hits.")
 	if "query_gene" not in blast_hits[0]:
@@ -512,15 +591,26 @@ def _blast_panel():
 			blast_hits, caption=f"BLAST hits on proteins predicted by CARD ({len(blast_hits)})"
 		)
 	rows = []
-	for blast_hit in blast_hits:
+	for index, blast_hit in enumerate(blast_hits):
 		is_novel = (blast_hit.get("is_novel", "") or "").lower() == "yes"
+		gene_name = blast_hit.get("query_gene", "")
+		accession = blast_hit.get("ncbi_accession", "")
+		# Reproduces blast_ncbi.select_queries' own qid assignment exactly
+		# (q<index>_<gene, non-alnum squashed to _>) -- the only key shared
+		# between blast_results.csv's summary row and blast_results_full.tsv's
+		# per-HSP rows.
+		qid = f"q{index}_{re.sub(r'[^A-Za-z0-9]', '_', gene_name)}"
+		max_score, total_score, evalue = _blast_hsp_stats(blast_hsp_index, qid, accession)
 		rows.append(
 			[
-				f"<strong>{escape_html(blast_hit.get('query_gene', ''))}</strong>",
+				f"<strong>{escape_html(gene_name)}</strong>",
 				f'<span class="wrap">{escape_html(blast_hit.get("ncbi_top_hit", ""))}</span>',
-				f'<span class="mono">{escape_html(blast_hit.get("ncbi_accession", ""))}</span>',
-				percent(blast_hit.get("ncbi_identity_pct")),
+				f'<span class="mono">{escape_html(accession)}</span>',
+				number(max_score, 1),
+				number(total_score, 1),
 				percent(blast_hit.get("ncbi_coverage_pct")),
+				escape_html(evalue) if evalue else MISSING,
+				percent(blast_hit.get("ncbi_identity_pct")),
 				percent(blast_hit.get("card_identity_pct")),
 				"novel" if is_novel else "known",
 				escape_html(blast_hit.get("source", "")),
@@ -532,9 +622,13 @@ def _blast_panel():
 			"Query",
 			"Description",
 			"Accession",
-			"Per. Ident",
+			"Max Score",
+			"Total Score",
 			"Query Cover",
+			"E value",
+			"Per. Ident",
 			"CARD Ident",
+			"Status",
 			"Database",
 			"Location",
 		],
@@ -597,15 +691,19 @@ def _mlst_panel():
 			)
 		)
 
-	# rST / species identity, and how many of the 53 ribosomal loci matched
-	# exactly, over the per-locus detail table -- the "N exact matches found"
-	# banner PubMLST prints above that table.
+	# rST / species identity, and PubMLST's own "N exact matches found" banner
+	# total over the per-locus detail table below -- a genome can carry two
+	# copies of a locus (different contigs), so this is a count of matches, not
+	# of loci: len(exact_matches) undercounts whenever that happens, since it
+	# only counts locus keys.
 	if fields or exact_matches:
+		exact_match_total = _rmlst_exact_match_total(exact_matches)
 		panels.append(
 			'<div class="upload-note">'
 			f"<p><strong>rST:</strong> {escape_html(fields.get('rST', 'N/A'))} &nbsp;"
 			f"<strong>Species:</strong> <em>{escape_html(fields.get('species', 'N/A'))}</em></p>"
-			f"<p>{len(exact_matches)}/53 ribosomal loci matched exactly.</p></div>"
+			f"<p>{exact_match_total} exact match(es) found across "
+			f"{len(exact_matches)}/53 loci.</p></div>"
 		)
 
 	# Where each matched allele sits on the assembly, and its linked data. Each

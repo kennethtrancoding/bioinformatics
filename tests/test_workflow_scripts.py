@@ -466,7 +466,7 @@ class TestAnalysisChain(unittest.TestCase):
                      card=WORK / "03_resistance" / "novelty_report.txt",
                      rgi=WORK / "03_resistance" / "rgi_results.csv",
                      rgi_json=self.rgi_json,
-                     blast=blast_csv,
+                     blast=blast_csv, blast_full="/nonexistent.tsv",
                      mlst=mlst_json,
                      rmlst_raw=rmlst_raw,
                      mobile_element_finder=WORK / "06_mobile_elements" / "me_summary.csv",
@@ -484,7 +484,7 @@ class TestAnalysisChain(unittest.TestCase):
             self.assertIn(str(expected), html, f"missing {expected} in report")
         # Each tab has to speak its own service's language, which is the whole
         # point of taking these inputs rather than the summarised ones.
-        for expected in ["Best_Hit_ARO", "Cut_Off", "AMR Gene Family",  # RGI's
+        for expected in ["ARO Term", "RGI Criteria", "AMR Gene Family",  # RGI's
                          "Table 1. Assembly Details",                   # BV-BRC's
                          "rST", "12345", "53/53", "Predicted taxa",     # PubMLST's
                          "Per. Ident", "Query Cover", "WP_000123.1",    # NCBI's
@@ -607,7 +607,7 @@ class TestAnalysisChain(unittest.TestCase):
             "generate_sample_report.py",
             input=NS(assembly_metrics=WORK / "02_assembly" / "genome_metrics.csv",
                      card="/nonexistent.txt", rgi=xss_rgi, rgi_json="/nonexistent.json",
-                     blast="/nonexistent.csv",
+                     blast="/nonexistent.csv", blast_full="/nonexistent.tsv",
                      mlst=WORK / "05_mlst" / "mlst_results.json",
                      rmlst_raw="/nonexistent.json",
                      mobile_element_finder=WORK / "06_mobile_elements" / "me_summary.csv",
@@ -628,7 +628,7 @@ class TestAnalysisChain(unittest.TestCase):
             "generate_sample_report.py",
             input=NS(assembly_metrics="/nonexistent.csv", card="/nonexistent.txt",
                      rgi="/nonexistent.csv", rgi_json="/nonexistent.json",
-                     blast="/nonexistent.csv",
+                     blast="/nonexistent.csv", blast_full="/nonexistent.tsv",
                      mlst="/nonexistent.json", rmlst_raw="/nonexistent.json",
                      mobile_element_finder="/nonexistent.csv",
                      mge_calls="/nonexistent.csv", colocation="/nonexistent.json",

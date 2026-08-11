@@ -16,6 +16,10 @@ rule generate_sample_report:
         rgi = f"{config['results_dir']}/{{sample}}/03_resistance/rgi_results.csv",
         rgi_json = f"{config['results_dir']}/{{sample}}/03_resistance/rgi_results.json",
         blast = f"{config['results_dir']}/{{sample}}/04_blast/blast_results.csv",
+        # Max Score/Total Score/E value have no equivalent in blast_results.csv
+        # (a best-hit-per-enzyme summary) -- only the raw per-HSP tabular output
+        # blast_ncbi_novelty also writes carries them.
+        blast_full = f"{config['results_dir']}/{{sample}}/04_blast/blast_results_full.tsv",
         mlst = f"{config['results_dir']}/{{sample}}/05_mlst/mlst_results.json",
         rmlst_raw = f"{config['results_dir']}/{{sample}}/05_mlst/rmlst_raw.json",
         mobile_element_finder = f"{config['results_dir']}/{{sample}}/06_mobile_elements/me_summary.csv",
