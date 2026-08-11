@@ -52,7 +52,10 @@ def load_mges(mge_csv):
 		data_lines = [data_line for data_line in file_handle if not data_line.startswith("#")]
 	mobile_genetic_elements = []
 	for csv_row in csv.DictReader(data_lines):
-		start_position, end_position = _to_int(csv_row.get("start")), _to_int(csv_row.get("end"))
+		# mefinder has renamed this column across releases ("end" -> "stop");
+		# mefinder.yml pins no version, so either can show up.
+		start_position = _to_int(csv_row.get("start"))
+		end_position = _to_int(csv_row.get("end") or csv_row.get("stop"))
 		if start_position is None or end_position is None:
 			continue
 		mobile_genetic_elements.append(

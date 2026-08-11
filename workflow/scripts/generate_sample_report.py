@@ -753,12 +753,15 @@ def _mef_panel():
 				[
 					f"<strong>{escape_html(mge_call.get('name', ''))}</strong>",
 					escape_html(mge_call.get("type", "")),
-					escape_html(mge_call.get("prediction", "")),
+					# mefinder has renamed these columns across releases
+					# ("prediction" -> "prediction method", "end" -> "stop");
+					# mefinder.yml pins no version, so either can show up.
+					escape_html(mge_call.get("prediction") or mge_call.get("prediction method") or ""),
 					fraction_as_percent(mge_call.get("identity")),
 					fraction_as_percent(mge_call.get("coverage")),
 					f"{number(template_length)} bp" if template_length else MISSING,
 					f'<span class="mono">{number(mge_call.get("start"))}-'
-					f"{number(mge_call.get('end'))}</span>",
+					f"{number(mge_call.get('end') or mge_call.get('stop'))}</span>",
 				]
 			)
 		panels.append(
