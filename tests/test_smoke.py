@@ -102,6 +102,13 @@ class TestPages(Base):
 		self.assertIn('href="/static/poster.pdf"', page)
 		nav = page[page.index("<nav>") : page.index("</nav>")]
 		self.assertIn('href="/static/poster.pdf">Poster</a>', nav)
+		# The backup page on kennethtrancoding.com probes with HEAD and must be
+		# able to read the status.
+		head = self.client.head("/references")
+		self.assertEqual(head.status_code, 200)
+		self.assertEqual(
+			head.headers["Access-Control-Allow-Origin"], "https://kennethtrancoding.com"
+		)
 
 	def test_index_shows_reference_database_age(self):
 		from datetime import datetime, timedelta, timezone

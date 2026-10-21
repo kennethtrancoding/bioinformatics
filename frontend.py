@@ -470,7 +470,13 @@ def analysis():
 
 @app.route("/references")
 def references():
-	return render_template("references.html")
+	# kennethtrancoding.com/bioinformatics-references (the poster's QR code) probes
+	# this page before redirecting here, and shows its own copy of the references
+	# when it cannot reach it. The probe has to read the status -- a 502 from Caddy
+	# while the container is down is not "reachable" -- and only CORS lets it.
+	return render_template("references.html"), {
+		"Access-Control-Allow-Origin": "https://kennethtrancoding.com"
+	}
 
 
 @app.route("/job/new", methods=["POST"])
