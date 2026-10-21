@@ -6,7 +6,7 @@ and both are deliberately ignorant of which service produced the value:
 
   value formatters   number / percent / fraction_as_percent, each rendering an
                      absent value as MISSING rather than as a zero.
-  markup builders    table / kv_table / support_bar and friends, which escape
+  markup builders    table / kv_table / seq_box and friends, which escape
                      their own text and hand back a fragment.
 
 A renderer that has to know one service's data shape -- which JSON keys an RGI
@@ -119,22 +119,6 @@ def kv_table(pairs, caption=None):
 		parts.append(f'<tr><th scope="row">{escape_html(key)}</th><td>{value}</td></tr>')
 	parts.append("</tbody></table></div>")
 	return "".join(parts)
-
-
-def support_bar(value):
-	"""PubMLST draws the Predicted-taxa support column as a filled bar, not a
-	bare number; mirror it so a 100% call reads at a glance the way it does on
-	the hosted rMLST results page."""
-	if value is None or value == "":
-		return MISSING
-	try:
-		pct = max(0.0, min(100.0, float(value)))
-	except (TypeError, ValueError):
-		return escape_html(value)
-	return (
-		f'<span class="support-bar"><span class="support-fill" style="width:{pct:.0f}%"></span>'
-		f'<span class="support-label">{pct:.0f}%</span></span>'
-	)
 
 
 def seq_box(sequence):

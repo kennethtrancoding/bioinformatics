@@ -72,6 +72,14 @@ button {
 	font-size: 0.95rem;
 }
 
+/* APA's hanging indent for the references page. Long DOIs may break anywhere
+   rather than run off a narrow screen. */
+.references p {
+	padding-left: 2rem;
+	text-indent: -2rem;
+	overflow-wrap: anywhere;
+}
+
 /* The import summary reports each rejected pair on its own line: a folder of 50
    can have more than one thing wrong with it, and the reasons are unreadable
    run together in a paragraph. */

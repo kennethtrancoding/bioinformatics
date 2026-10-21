@@ -161,6 +161,18 @@
 			<tbody></tbody>
 		</table>
 
+		<h1>Other Information</h1>
+		<ul>
+			<li>
+				<a href="{{ url_for('static', filename='poster.pdf') }}">Poster</a>: Automating
+				Antimicrobial Resistance Genome Analysis Through a Bioinformatic Pipeline (PDF)
+			</li>
+			<li>
+				<a href="{{ url_for('references') }}">References</a> for the tools and databases the
+				pipeline is built on
+			</li>
+		</ul>
+
 		<script defer src="{{ url_for('static', filename='app.js') }}"></script>
 	</body>
 </html>

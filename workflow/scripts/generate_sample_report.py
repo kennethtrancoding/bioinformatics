@@ -1,9 +1,9 @@
 """
-Generate Sample Report Script (Snakemake rule: generate_sample_report)
-Generate HTML report for individual sample.
+Generate Sample Report Script (Snakemake rule: generate_sample_report) Generate
+HTML report for individual sample.
 
-Each tab presents one upstream service's results in that service's own
-vocabulary and visual convention, so a value can be cross-referenced against the
+Each section presents one upstream service's results in that service's own
+vocabulary and table layout, so a value can be cross-referenced against the
 service it came from without re-mapping terms:
 
   BV-BRC  "Table N." captions and a bold key column -- the layout of BV-BRC's
@@ -15,21 +15,24 @@ service it came from without re-mapping terms:
   MLST    PubMLST's allelic profile and rMLST's taxon-prediction table
           (Rank / Taxon / Support / Taxonomy).
   MEF     MobileElementFinder's own results page: the version banner, a
-          "Displaying N of M" line, a contig overview, then a section per
-          contig headed by its full defline. Grouped by contig --
-          which is what the web service shows. Its plain-text result.txt groups
-          by element type instead, and following that would match neither.
-          Its Resistance column is filled from CARD, and says so: see
-          _resistance_by_contig for why it cannot come from mefinder.
+          "Displaying N of M" line, a contig overview, then a section per contig
+          headed by its full defline. Grouped by contig -- which is what the web
+          service shows. Its plain-text result.txt groups by element type
+          instead, and following that would match neither. Its Resistance column
+          is filled from CARD, and says so: see _resistance_by_contig for why it
+          cannot come from mefinder.
 
 The report is served under a strict CSP (see view_result in frontend.py):
 
     default-src 'none'; style-src 'unsafe-inline'; img-src data:; sandbox
 
 script-src falls back to default-src 'none', so the report cannot run any
-JavaScript at all -- the radio-input tabs below are a CSS-only mechanism, not a
-stylistic preference. The same fallback blocks external stylesheets, fonts and
-images, so everything here is one inline <style> and a system font stack.
+JavaScript at all: the sections are stacked on one page with anchor links, and
+the long sequence blocks collapse with native <details>. The same fallback blocks
+external stylesheets, fonts and images, so the report cannot link the app's own
+static/style.css. It carries an inline copy of those rules instead, which is what
+makes it look like the rest of the app: plain system font, grouped boxes, and
+tables with a light-grey header and a 1px grid.
 """
 
 import csv
@@ -47,7 +50,6 @@ from report_format import (
 	number,
 	percent,
 	seq_box,
-	support_bar,
 	table,
 )
 from report_io import read_csv_rows, read_json
@@ -61,7 +63,8 @@ def _inputs_from_sample_dir(sample_dir, report_out=None):
 	`python generate_sample_report.py <results>/<SAMPLE>` -- without going
 	through the DAG, which on a stale or partial tree would try to rebuild every
 	upstream rule (re-fetching deleted raw reads and so on). The rule keeps
-	passing these same paths via `snakemake.input`; this is only another way in."""
+	passing these same paths via `snakemake.input`; this is only another way
+	in."""
 	sample_dir = Path(sample_dir)
 	sample = sample_dir.name
 	return {
@@ -141,8 +144,8 @@ def _blast_hsp_index(input_path):
 	then coverage -- see blast_ncbi.parse_blast_tab), which is enough for the
 	novelty/location call but drops bitscore and evalue entirely. Max Score,
 	Total Score and E value only exist here. On a failed BLAST run the first
-	line is `# <failure note>`, not the header, so that line is dropped the
-	same way mefinder's and RGI's comment-prefixed outputs are."""
+	line is `# <failure note>`, not the header, so that line is dropped the same
+	way mefinder's and RGI's comment-prefixed outputs are."""
 	path = Path(input_path)
 	if not input_path or not path.is_file():
 		return {}
@@ -187,18 +190,16 @@ def _rgi_sequence_index(input_path):
 
 	Keyed on the same orf_id the CSV rows use, because the CARD panel joins the
 	two on it and drops any row it cannot find a key for. That join is why this
-	goes through iter_best_hits rather than walking the JSON here: a private walk
-	keyed these by the hit's own JSON key (the CARD model) while the CSV moved to
-	the ORF, and the panel silently rendered nothing at all."""
-	return {
-		orf_id: hit for orf_id, hit, _contig in iter_best_hits(read_json(input_path))
-	}
+	goes through iter_best_hits rather than walking the JSON here: a private
+	walk keyed these by the hit's own JSON key (the CARD model) while the CSV
+	moved to the ORF, and the panel silently rendered nothing at all."""
+	return {orf_id: hit for orf_id, hit, _contig in iter_best_hits(read_json(input_path))}
 
 
 def _linked_data_values(linked_data):
-	"""The PubMLST "Linked data values" cell: a green database badge followed by
-	the species/frequency breakdown recorded for this allele
-	("species: Enterobacter pasteurii [n=3]; Enterobacter sp. [n=1]").
+	"""The PubMLST "Linked data values" cell: the species/frequency breakdown
+	recorded for this allele ("species: Enterobacter pasteurii [n=3];
+	Enterobacter sp. [n=1]"), with the database it came from underneath.
 
 	`linked_data` is PubMLST's own nested shape -- {database: {field: [{value,
 	frequency}, ...]}} -- and is only present when the query was made with
@@ -208,7 +209,6 @@ def _linked_data_values(linked_data):
 		return MISSING
 	blocks = []
 	for database, database_fields in linked_data.items():
-		badge = f'<span class="linked-db">{escape_html(database)}</span>'
 		field_parts = []
 		for field_name, values in (database_fields or {}).items():
 			rendered = "; ".join(
@@ -217,7 +217,7 @@ def _linked_data_values(linked_data):
 				for value in values
 			)
 			field_parts.append(f"{escape_html(field_name)}: {rendered}")
-		blocks.append(f"{badge} {'<br>'.join(field_parts)}")
+		blocks.append(f"{'<br>'.join(field_parts)}<br><small>{escape_html(database)}</small>")
 	return "<br>".join(blocks)
 
 
@@ -230,8 +230,8 @@ rgi_hits = read_csv_rows(rgi_file)
 rgi_sequences = _rgi_sequence_index(rgi_json_file)
 # SNPs_in_Best_Hit_ARO has no JSON equivalent -- it exists only in `rgi main`'s
 # tab report, alongside Percentage Length of Reference Sequence (see
-# rgi_json.TAB_COVERAGE_COLUMN). Same tolerant-of-missing behaviour: {} when
-# the tab report isn't there.
+# rgi_json.TAB_COVERAGE_COLUMN). Same tolerant-of-missing behaviour: {} when the
+# tab report isn't there.
 rgi_tab_index = load_tab_report(rgi_json_file)
 blast_hits = read_csv_rows(blast_file)
 blast_hsp_index = _blast_hsp_index(blast_full_file)
@@ -261,13 +261,13 @@ def _resistance_by_contig():
 	"""Resistance genes per contig, and which of them sit on a mobile element.
 
 	These are CARD/RGI calls, not mefinder's. MobileElementFinder's own results
-	page carries Resistance and Virulence columns, but they come from CGE running
-	ResFinder and VirulenceFinder alongside it on the server -- the `mefinder`
-	CLI this pipeline runs has no such flags and emits no such data (checked
-	against MobileElementFinder 1.1.2: no --resistance, no --virulence, no
-	mention of either anywhere in the package). So the column is filled from the
-	tool that does call resistance here, and labelled as such rather than passed
-	off as mefinder's."""
+	page carries Resistance and Virulence columns, but they come from CGE
+	running ResFinder and VirulenceFinder alongside it on the server -- the
+	`mefinder` CLI this pipeline runs has no such flags and emits no such data
+	(checked against MobileElementFinder 1.1.2: no --resistance, no --virulence,
+	no mention of either anywhere in the package). So the column is filled from
+	the tool that does call resistance here, and labelled as such rather than
+	passed off as mefinder's."""
 	by_contig = {}
 	for call in colocation_calls:
 		contig = _contig_token(call.get("contig"))
@@ -338,7 +338,7 @@ def _novelty_for(rgi_hit):
 
 def _summary_panel():
 	"""Our own cross-service verdict. Every fact is tagged with the service that
-	produced it, because that is the tab to open to check it."""
+	produced it, because that is the section to open to check it."""
 	species = mlst_result_data.get("species")
 	sequence_type = mlst_result_data.get("st")
 	rows = []
@@ -367,8 +367,7 @@ def _summary_panel():
 		rows.append(
 			(
 				"Ribosomal ST",
-				f"rST {escape_html(rst)}<br><small>MLST "
-				f"{exact_match_total} exact matches</small>",
+				f"rST {escape_html(rst)}<br><small>MLST {exact_match_total} exact matches</small>",
 			)
 		)
 
@@ -456,8 +455,9 @@ def _pairwise_alignment(hit, width=60):
 		return ""
 
 	# Numbered from 1 along the aligned region. RGI's query_start/hit_start are
-	# nucleotide coordinates on the contig and CARD DNA (query_start == orf_start),
-	# not protein-residue indices, so they cannot label an amino-acid alignment.
+	# nucleotide coordinates on the contig and CARD DNA (query_start ==
+	# orf_start), not protein-residue indices, so they cannot label an
+	# amino-acid alignment.
 	query_pos, subject_pos = 1, 1
 	lines = []
 	for offset in range(0, len(query), width):
@@ -487,7 +487,8 @@ def _card_panel():
 	report carries it, joined in below the same way rgi_json_to_csv.py joins
 	Percentage Length of Reference Sequence. Detection Criteria (model_type) and
 	AST Source (ast_source) do live in the JSON, keyed by orf_id via
-	rgi_sequences -- the same index the sequence-alignment section below uses."""
+	rgi_sequences -- the same index the sequence-alignment section below
+	uses."""
 	if not rgi_hits:
 		return empty("No resistance gene hits.")
 	if "best_hit_aro" not in rgi_hits[0]:
@@ -500,7 +501,7 @@ def _card_panel():
 		aro_accession = rgi_hit.get("aro_accession", "")
 		aro_term = f"<strong>{escape_html(rgi_hit.get('best_hit_aro', ''))}</strong>"
 		if aro_accession:
-			aro_term += f'<br><small>ARO:{escape_html(aro_accession)}</small>'
+			aro_term += f"<br><small>ARO:{escape_html(aro_accession)}</small>"
 		# Perfect / Strict / Loose are RGI's own detection paradigms.
 		rows.append(
 			[
@@ -535,9 +536,10 @@ def _card_panel():
 
 	# The predicted ORF's actual protein/DNA against CARD's, per query: the
 	# pairwise protein alignment RGI computed, then both DNA sequences. Long, so
-	# each query collapses (native <details>, no script -- the CSP forbids JS) and
-	# every sequence sits in its own scrollable box. Comes from rgi_results.json,
-	# joined to the CSV rows on orf_id; absent (older tree) it is simply skipped.
+	# each query collapses (native <details>, no script -- the CSP forbids JS)
+	# and every sequence sits in its own scrollable box. Comes from
+	# rgi_results.json, joined to the CSV rows on orf_id; absent (older tree) it
+	# is simply skipped.
 	sequence_sections = []
 	for index, rgi_hit in enumerate(rgi_hits, start=1):
 		hit = rgi_sequences.get(rgi_hit.get("orf_id", ""))
@@ -566,10 +568,7 @@ def _card_panel():
 		)
 	sequences_html = ""
 	if sequence_sections:
-		sequences_html = (
-			'<h3 class="section-head">Query sequences, predicted vs CARD</h3>'
-			+ "".join(sequence_sections)
-		)
+		sequences_html = "<h2>Query sequences, predicted vs CARD</h2>" + "".join(sequence_sections)
 
 	return table_html + sequences_html
 
@@ -583,7 +582,8 @@ def _blast_panel():
 	is nothing to render them from -- omitted rather than faked.
 
 	Max Score/Total Score/E value come from blast_results_full.tsv, the raw
-	per-HSP output -- blast_results.csv (a best-hit summary) never carried them."""
+	per-HSP output -- blast_results.csv (a best-hit summary) never carried
+	them."""
 	if not blast_hits:
 		return empty("No BLAST hits.")
 	if "query_gene" not in blast_hits[0]:
@@ -640,8 +640,7 @@ def _blast_panel():
 def _mlst_panel():
 	"""PubMLST's own rMLST results page: the 7-gene allelic profile a PubMLST
 	user keys on, then rMLST's "Predicted taxa" table and every exact ribosomal-
-	locus match, laid out the way pubmlst.org/rmlst renders them -- a support bar
-	per taxon and a green "linked data values" badge per locus."""
+	locus match, with pubmlst.org/rmlst's own columns and headings."""
 	if not mlst_result_data and not rmlst_raw:
 		return empty("No MLST data available.")
 
@@ -670,19 +669,19 @@ def _mlst_panel():
 	fields = rmlst_raw.get("fields") or {}
 	exact_matches = rmlst_raw.get("exact_matches") or {}
 
-	# Predicted taxa -- rMLST's ranked calls, support drawn as a bar.
+	# Predicted taxa -- rMLST's ranked calls.
 	taxon_rows = []
 	for taxon in rmlst_raw.get("taxon_prediction") or []:
 		taxon_rows.append(
 			[
 				escape_html(str(taxon.get("rank", "")).upper()),
 				f"<em>{escape_html(taxon.get('taxon', ''))}</em>",
-				support_bar(taxon.get("support")),
-				f'<span class="wrap lineage">{escape_html(taxon.get("taxonomy", ""))}</span>',
+				percent(taxon.get("support"), 0),
+				f'<span class="wrap"><small>{escape_html(taxon.get("taxonomy", ""))}</small></span>',
 			]
 		)
 	if taxon_rows:
-		panels.append('<h3 class="pubmlst-head">Predicted taxa</h3>')
+		panels.append("<h2>Predicted taxa</h2>")
 		panels.append(
 			table(
 				["Rank", "Taxon", "Support", "Taxonomy"],
@@ -699,11 +698,10 @@ def _mlst_panel():
 	if fields or exact_matches:
 		exact_match_total = _rmlst_exact_match_total(exact_matches)
 		panels.append(
-			'<div class="upload-note">'
 			f"<p><strong>rST:</strong> {escape_html(fields.get('rST', 'N/A'))} &nbsp;"
-			f"<strong>Species:</strong> <em>{escape_html(fields.get('species', 'N/A'))}</em></p>"
-			f"<p>{exact_match_total} exact match(es) found across "
-			f"{len(exact_matches)}/53 loci.</p></div>"
+			f"<strong>Species:</strong> <em>{escape_html(fields.get('species', 'N/A'))}</em><br>"
+			f"{exact_match_total} exact match(es) found across "
+			f"{len(exact_matches)}/53 loci.</p>"
 		)
 
 	# Where each matched allele sits on the assembly, and its linked data. Each
@@ -749,16 +747,16 @@ def _mlst_panel():
 def _mef_panel():
 	"""mefinder's own results page, as closely as this data allows: the version
 	banner, the count line, a contig overview, then a section per contig headed
-	by its full defline. It groups by contig -- not by element type, which is how
-	its plain-text result.txt groups them and is not what a user coming from the
-	web service is looking at."""
+	by its full defline. It groups by contig -- not by element type, which is
+	how its plain-text result.txt groups them and is not what a user coming from
+	the web service is looking at."""
 	panels = []
 
-	# mefinder writes the whole FASTA defline into `contig`
-	# ("assembly_contig_2 length 713330 coverage 135.2 normalized_cov 1.05"),
-	# which is exactly what its results page uses as each section's heading. Key
-	# on the bare token so the resistance rows can be joined to it, and keep the
-	# defline for the heading.
+	# mefinder writes the whole FASTA defline into `contig` ("assembly_contig_2
+	# length 713330 coverage 135.2 normalized_cov 1.05"), which is exactly what
+	# its results page uses as each section's heading. Key on the bare token so
+	# the resistance rows can be joined to it, and keep the defline for the
+	# heading.
 	calls_by_contig = {}
 	deflines = {}
 	for mge_call in mge_calls:
@@ -774,8 +772,8 @@ def _mef_panel():
 		return "".join(panels)
 
 	# The union, not just the contigs carrying an element: mefinder's own
-	# overview lists a contig with 0 MGEs when it has a resistance hit.
-	# Natural order, or assembly_contig_10 sorts above assembly_contig_2.
+	# overview lists a contig with 0 MGEs when it has a resistance hit. Natural
+	# order, or assembly_contig_10 sorts above assembly_contig_2.
 	contigs_in_order = sorted(
 		set(calls_by_contig) | set(resistance_by_contig),
 		key=lambda contig: [
@@ -796,7 +794,7 @@ def _mef_panel():
 		len(mge_calls),
 	)
 	panels.append(
-		f'<p class="displaying">Displaying: <strong>{len(mge_calls)}</strong> of '
+		f"<p>Displaying: <strong>{len(mge_calls)}</strong> of "
 		f"<strong>{escape_html(total_called)}</strong> mobile elements</p>"
 	)
 
@@ -809,7 +807,7 @@ def _mef_panel():
 		resistance = resistance_by_contig.get(contig, {"genes": set(), "on_mge": set()})
 		genes = resistance["genes"]
 		# 162 distinct genes sit on the chromosome of a real isolate, so the
-		# names cannot go in this cell -- the CARD tab lists them in full. The
+		# names cannot go in this cell -- the CARD section lists them in full. The
 		# ones on a mobile element are the few worth naming here, and are the
 		# question this pipeline exists to answer.
 		if genes:
@@ -825,8 +823,7 @@ def _mef_panel():
 			[
 				contig_cell,
 				number(len(calls)),
-				escape_html(", ".join(sorted({call.get("name", "") for call in calls})))
-				or MISSING,
+				escape_html(", ".join(sorted({call.get("name", "") for call in calls}))) or MISSING,
 				resistance_cell,
 			]
 		)
@@ -854,7 +851,9 @@ def _mef_panel():
 					# mefinder has renamed these columns across releases
 					# ("prediction" -> "prediction method", "end" -> "stop");
 					# mefinder.yml pins no version, so either can show up.
-					escape_html(mge_call.get("prediction") or mge_call.get("prediction method") or ""),
+					escape_html(
+						mge_call.get("prediction") or mge_call.get("prediction method") or ""
+					),
 					fraction_as_percent(mge_call.get("identity")),
 					fraction_as_percent(mge_call.get("coverage")),
 					f"{number(template_length)} bp" if template_length else MISSING,
@@ -863,7 +862,7 @@ def _mef_panel():
 				]
 			)
 		panels.append(
-			f'<h3 class="contig" id="contig-{index}">Contig: {escape_html(contig_defline)}</h3>'
+			f'<h3 id="contig-{index}">Contig: {escape_html(contig_defline)}</h3>'
 			"<h4>Mobile element results</h4>"
 			+ table(
 				[
@@ -889,13 +888,7 @@ def _mef_panel():
 					("Resistance genes total", number(colocation.get("resistance_genes_total"))),
 					("Resistance genes on MGE", number(colocation.get("resistance_genes_on_mge"))),
 					("Proximity window", f"{number(colocation.get('proximity_bp'))} bp"),
-					(
-						"Linked genes",
-						" ".join(
-							f'<span class="allele">{escape_html(g)}</span>' for g in linked_genes
-						)
-						or "None",
-					),
+					("Linked genes", escape_html(", ".join(linked_genes)) or "None"),
 				],
 				caption="ARG / MGE colocation",
 			)
@@ -908,7 +901,7 @@ def _mef_panel():
 
 sample_id = mlst_result_data.get("sample") or colocation.get("sample_id") or "Sample"
 
-TABS = [
+SECTIONS = [
 	("summary", "Summary", _summary_panel()),
 	("bvbrc", "BV-BRC", _bvbrc_panel()),
 	("card", "CARD", _card_panel()),
@@ -917,17 +910,14 @@ TABS = [
 	("mef", "MEF", _mef_panel()),
 ]
 
-radios = "".join(
-	f'<input type="radio" id="{key}" name="tabs"{" checked" if index == 0 else ""}>'
-	for index, (key, _, _) in enumerate(TABS)
+# The app's own nav line ("Analysis | API Settings"), pointing down the page
+# rather than across the site: the report also travels as a file inside the
+# results zip, where a link back into the app would lead nowhere.
+nav = " | ".join(f'<a href="#{key}">{escape_html(title)}</a>' for key, title, _ in SECTIONS)
+sections = "".join(
+	f'<section id="{key}"><h1>{escape_html(title)}</h1>{body}</section>'
+	for key, title, body in SECTIONS
 )
-labels = "".join(f'<label for="{key}">{escape_html(title)}</label>' for key, title, _ in TABS)
-panels = "".join(
-	f'<section id="{key}-content" class="content"><h2>{escape_html(title)}</h2>{body}</section>'
-	for key, title, body in TABS
-)
-checked_rules = ",\n".join(f"#{key}:checked ~ .contents #{key}-content" for key, _, _ in TABS)
-label_rules = ",\n".join(f'#{key}:checked ~ .labels label[for="{key}"]' for key, _, _ in TABS)
 
 html_content = f"""<!DOCTYPE html>
 <html lang="en">
@@ -936,189 +926,48 @@ html_content = f"""<!DOCTYPE html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{escape_html(sample_id)}: Sample Report</title>
 <style>
-:root {{ --accent: #334155; --line: #ccc; --muted: #777; }}
-* {{ box-sizing: border-box; }}
+/* static/style.css, inlined -- the CSP forbids linking it. Keep the two in step.
+   One rule is left out on purpose: the app caps the page at 60rem, which suits
+   its forms but squeezes the 10-12 column CARD/BLAST/rMLST tables into scrolling. */
 body {{
-  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-  color: #222;
-  margin: 0;
-  padding: 1.5rem;
-  line-height: 1.45;
-}}
-h1 {{ font-size: 1.3rem; margin: 0 0 0.25rem; }}
-h1 .sample {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }}
-h2 {{ font-size: 1.1rem; font-weight: 500; margin: 0 0 1rem; color: var(--accent); }}
-.sub {{ color: var(--muted); font-size: 0.85rem; margin: 0 0 1.25rem; }}
-
-.tabs input[type="radio"] {{ position: absolute; opacity: 0; pointer-events: none; }}
-.labels {{ display: flex; flex-wrap: wrap; gap: 2px; border-bottom: 2px solid var(--line); }}
-.labels label {{
-  padding: 0.5rem 1rem;
-  cursor: pointer;
-  font-size: 0.9rem;
-  color: var(--muted);
-  border-bottom: 3px solid transparent;
-  margin-bottom: -2px;
-}}
-.labels label:hover {{ color: #222; }}
-.content {{ display: none; padding: 1.5rem 0; }}
-{checked_rules} {{ display: block; }}
-{label_rules} {{ color: var(--accent); border-bottom-color: var(--accent); font-weight: 600; }}
-
-/* Keyboard focus is the only affordance a CSS-only tabstrip has; the radios
-   themselves are off-screen, so the ring has to be drawn on the label. */
-.tabs input[type="radio"]:focus-visible ~ .labels label {{ outline: none; }}
-{",".join(f'#{key}:focus-visible ~ .labels label[for="{key}"]' for key, _, _ in TABS)} {{
-  outline: 2px solid black;
-  outline-offset: -2px;
-}}
-
-/* Tables follow the app's own convention (static/style.css .status-table): a
-   full 1px cell grid, a light-grey header band and dark text throughout -- no
-   per-service colour. A bold key column is kept where a panel uses one. */
-.scroll {{ overflow-x: auto; margin: 0 0 1.5rem; }}
-table {{ border-collapse: collapse; font-size: 0.875rem; width: 100%; }}
-caption {{
-  caption-side: top;
-  text-align: left;
-  font-weight: 600;
-  padding: 0.4rem 0.5rem;
+  font-family: system-ui, sans-serif;
+  margin: 2rem;
   color: #222;
 }}
-thead th {{
-  background: #f4f4f4;
-  color: #222;
-  font-weight: 600;
-  text-align: left;
-  padding: 0.4rem 0.6rem;
-  white-space: nowrap;
-  border: 1px solid var(--line);
-}}
-td, tbody th {{ padding: 0.4rem 0.6rem; border: 1px solid var(--line); text-align: left; vertical-align: top; }}
-tbody th {{ font-weight: 700; white-space: nowrap; width: 1%; background: #f4f4f4; }}
-table.kv {{ width: auto; min-width: 22rem; }}
+nav {{ margin-bottom: 1rem; }}
+table {{ border-collapse: collapse; width: 100%; margin: 0.5rem 0; }}
+th, td {{ border: 1px solid #ccc; padding: 0.4rem 0.6rem; text-align: left; vertical-align: top; }}
+th {{ background: #f4f4f4; }}
+small {{ color: #777; }}
 
-/* mefinder's results page, reproduced: a bold-labelled version banner, a
-   "Displaying N of M" line, a contig overview, then a section per contig. The
-   sub-tables use the same neutral grid as everywhere else. */
-dl.meta {{ margin: 0 0 1rem; }}
-dl.meta div {{ display: flex; gap: 0.5rem; padding: 0.05rem 0; }}
-dl.meta dt {{ font-weight: 700; min-width: 10rem; }}
-dl.meta dd {{ margin: 0; }}
-.displaying {{ margin: 0 0 0.75rem; }}
-.note {{
-  color: var(--muted);
-  font-size: 0.8rem;
-  margin: -1rem 0 1.5rem;
-  max-width: 46rem;
-}}
-.note code {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }}
-h3.contig {{
-  font-size: 1.05rem;
-  font-weight: 700;
-  margin: 1.75rem 0 0.25rem;
-  word-break: break-word;
-}}
-h4 {{ font-size: 0.85rem; font-weight: 700; margin: 0 0 0.25rem; }}
+/* The home page groups each step in a <fieldset>; this draws the same box
+   around each service. Not a fieldset itself: one sizes itself to its widest
+   child (min-inline-size: min-content), so a wide table would push the box off
+   the page instead of scrolling inside it. */
+section {{ border: 2px groove ThreeDFace; padding: 0.35em 0.75em 0.625em; margin: 0 2px 1rem; }}
+
+caption {{ text-align: left; font-weight: bold; padding: 0.4rem 0; }}
+thead th, tbody th {{ white-space: nowrap; }}
+table.kv {{ width: auto; }}
+.scroll {{ overflow-x: auto; }}
 /* A drug-class string runs to ~200 characters. Without a floor the browser
    squeezes those columns to a few characters wide and the table grows tall
-   instead of wide; the floor makes it overflow .scroll and scroll sideways,
-   which is what RGI's own results table does with the same data. */
-td .wrap {{ display: block; min-width: 13rem; max-width: 24rem; white-space: normal; overflow-wrap: anywhere; }}
-td.num, .mono {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.9em; }}
-.lineage {{ color: var(--muted); font-size: 0.9em; }}
-small {{ color: var(--muted); }}
-em {{ font-style: italic; }}
-.empty {{ color: var(--muted); font-style: italic; }}
-
-.allele {{
-  display: inline-block;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.8rem;
-  background: #f1f3f6;
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  padding: 0.05rem 0.35rem;
-  margin: 0 0.15rem 0.15rem 0;
-}}
-/* CARD panel query legend: which predicted protein each Query N refers to. */
-.query-legend {{ margin: 0 0 1rem; line-height: 1.9; }}
-.query-item {{ display: inline-block; margin: 0 0.9rem 0.2rem 0; white-space: nowrap; }}
-/* CARD panel per-query sequences: the predicted ORF's protein alignment against
-   CARD's reference, plus both DNA sequences. Sequences run to ~1000 residues, so
-   each query collapses by default and every sequence scrolls inside its box. */
-h3.section-head {{ font-size: 1.05rem; font-weight: 700; margin: 1.25rem 0 0.5rem; color: var(--accent); }}
-.seq-details {{ border: 1px solid var(--line); border-radius: 3px; margin: 0 0 0.5rem; padding: 0 0.7rem; }}
-.seq-details > summary {{ cursor: pointer; padding: 0.45rem 0; font-weight: 600; }}
-.seq-details h4 {{ margin: 0.6rem 0 0.25rem; }}
-pre.aln {{
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.75rem;
-  line-height: 1.35;
-  margin: 0 0 0.6rem;
-  padding: 0.5rem;
-  background: #f7f8fa;
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  overflow-x: auto;
-  white-space: pre;
-}}
-.seq-grid {{ display: flex; flex-wrap: wrap; gap: 0.75rem; margin: 0 0 0.7rem; }}
+   instead of wide; the floor makes it scroll sideways instead, which is what
+   RGI's own results table does with the same data. */
+td .wrap {{ display: block; min-width: 12rem; max-width: 24rem; overflow-wrap: anywhere; }}
+code, .mono, pre, .seqbox {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }}
+/* CARD's per-query sequences run to ~1000 residues, so each scrolls in its own box. */
+pre, .seqbox {{ border: 1px solid #ccc; padding: 0.4rem; overflow: auto; font-size: 0.8rem; }}
+.seqbox {{ max-height: 9rem; word-break: break-all; }}
+.seq-grid {{ display: flex; flex-wrap: wrap; gap: 0.75rem; }}
 .seq-grid > div {{ flex: 1 1 20rem; min-width: 0; }}
-.seqbox {{
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: 0.72rem;
-  line-height: 1.4;
-  max-height: 9rem;
-  overflow: auto;
-  padding: 0.4rem 0.5rem;
-  background: #f7f8fa;
-  border: 1px solid var(--line);
-  border-radius: 3px;
-  word-break: break-all;
-}}
-
-/* PubMLST's rMLST results page, reproduced: a "Predicted taxa" heading over a
-   support-bar table, a bordered rST/loci note, then the exact-match table with
-   a "linked data values" database badge per row. */
-h3.pubmlst-head {{ font-size: 1.05rem; font-weight: 700; margin: 0 0 0.35rem; color: var(--accent); }}
-.support-bar {{
-  position: relative;
-  display: inline-block;
-  min-width: 3.5rem;
-  background: #e5e7eb;
-  border-radius: 2px;
-  overflow: hidden;
-}}
-.support-fill {{ position: absolute; inset: 0 auto 0 0; background: #9ca3af; }}
-.support-label {{ position: relative; padding: 0 0.4rem; font-size: 0.85em; font-weight: 600; }}
-.linked-db {{
-  display: inline-block;
-  background: #5a5a5a;
-  color: #fff;
-  padding: 0.05rem 0.4rem;
-  border-radius: 2px;
-  font-size: 0.75rem;
-  font-weight: 600;
-}}
-.upload-note {{
-  background: #f4f4f4;
-  border-left: 4px solid var(--accent);
-  padding: 0.6rem 0.9rem;
-  margin: 0 0 1.25rem;
-  border-radius: 2px;
-}}
-.upload-note p {{ margin: 0.2rem 0; }}
+summary {{ cursor: pointer; }}
 </style>
 </head>
 <body>
-<h1><span class="sample">{escape_html(sample_id)}</span></h1>
-<p class="sub">Per-sample analysis report. Each tab shows one service's results in that service's own terms.</p>
-<div class="tabs">
-{radios}
-<div class="labels">{labels}</div>
-<div class="contents">{panels}</div>
-</div>
+<nav>{nav}</nav>
+<h1>{escape_html(sample_id)}</h1>
+{sections}
 </body>
 </html>
 """

@@ -86,6 +86,21 @@ class TestPages(Base):
 		r = self.client.get("/static/style.css")
 		self.assertEqual(r.status_code, 200)
 
+	def test_index_links_poster_and_references(self):
+		page = self.client.get("/").get_data(as_text=True)
+		self.assertIn("Other Information", page)
+		self.assertIn('href="/references"', page)
+		self.assertIn('href="/static/poster.pdf"', page)
+		self.assertEqual(self.client.get("/static/poster.pdf").status_code, 200)
+
+	def test_references_page_renders(self):
+		r = self.client.get("/references")
+		self.assertEqual(r.status_code, 200)
+		page = r.get_data(as_text=True)
+		self.assertIn("https://doi.org/10.1093/nar/gkac920", page)  # CARD 2023, first entry
+		self.assertIn("https://github.com/tseemann/mlst", page)  # mlst, last entry
+		self.assertIn('href="/static/poster.pdf"', page)
+
 	def test_index_shows_reference_database_age(self):
 		from datetime import datetime, timedelta, timezone
 
@@ -525,6 +540,11 @@ class TestSecurity(Base):
 		try:
 			self.assertEqual(self.client.get("/").status_code, 401)
 			self.assertEqual(self.client.get("/api/health").status_code, 200)  # monitoring exempt
+			# The printed poster's QR code lands on the references page, so it, the
+			# poster and the one stylesheet it loads are public -- and nothing else.
+			for public_path in ("/references", "/static/poster.pdf", "/static/style.css"):
+				self.assertEqual(self.client.get(public_path).status_code, 200, public_path)
+			self.assertEqual(self.client.get("/static/app.js").status_code, 401)
 			import base64
 
 			cred = base64.b64encode(b"mentor:s3cret").decode()

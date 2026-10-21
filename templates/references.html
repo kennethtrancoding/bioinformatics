@@ -1,0 +1,110 @@
+<!doctype html>
+<html>
+	<head>
+		<title>Bioinformatic Analysis - References</title>
+		<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}" />
+	</head>
+	<body>
+		<!-- Public even when APP_PASSWORD is set (see _PUBLIC_PATHS in frontend.py):
+		     the printed poster's QR code sends people here. -->
+		<nav>
+			<a href="{{ url_for('analysis') }}">Analysis</a> | <b>References</b>
+		</nav>
+
+		<h1>References</h1>
+		<p>
+			Poster:
+			<a href="{{ url_for('static', filename='poster.pdf') }}"
+				>Automating Antimicrobial Resistance Genome Analysis Through a Bioinformatic
+				Pipeline</a
+			>
+			(PDF)
+		</p>
+
+		<div class="references">
+			<p>
+				Alcock, B. P., et al. (2023). CARD 2023: Expanded curation, support for machine
+				learning, and resistome prediction at the Comprehensive Antibiotic Resistance
+				Database.
+				<i>Nucleic Acids Research</i>, <i>51</i>(D1), D690–D699.
+				<a href="https://doi.org/10.1093/nar/gkac920">https://doi.org/10.1093/nar/gkac920</a>
+			</p>
+			<p>
+				Altschul, S. F., Gish, W., Miller, W., Myers, E. W., &amp; Lipman, D. J. (1990).
+				Basic local alignment search tool. <i>Journal of Molecular Biology</i>,
+				<i>215</i>(3), 403–410.
+				<a href="https://doi.org/10.1016/S0022-2836(05)80360-2"
+					>https://doi.org/10.1016/S0022-2836(05)80360-2</a
+				>
+			</p>
+			<p>
+				Camacho, C., Coulouris, G., Avagyan, V., Ma, N., Papadopoulos, J., Bealer, K., &amp;
+				Madden, T. L. (2009). BLAST+: Architecture and applications.
+				<i>BMC Bioinformatics</i>, <i>10</i>, Article 421.
+				<a href="https://doi.org/10.1186/1471-2105-10-421"
+					>https://doi.org/10.1186/1471-2105-10-421</a
+				>
+			</p>
+			<p>
+				Feldgarden, M., et al. (2021). AMRFinderPlus and the Reference Gene Catalog
+				facilitate examination of the genomic links among antimicrobial resistance, stress
+				response, and virulence. <i>Scientific Reports</i>, <i>11</i>, Article 12728.
+				<a href="https://doi.org/10.1038/s41598-021-91456-0"
+					>https://doi.org/10.1038/s41598-021-91456-0</a
+				>
+			</p>
+			<p>
+				Johansson, M. H. K., et al. (2021). Detection of mobile genetic elements associated
+				with antibiotic resistance in <i>Salmonella enterica</i> using a newly developed web
+				tool: MobileElementFinder. <i>Journal of Antimicrobial Chemotherapy</i>,
+				<i>76</i>(1), 101–109.
+				<a href="https://doi.org/10.1093/jac/dkaa390">https://doi.org/10.1093/jac/dkaa390</a>
+			</p>
+			<p>
+				Jolley, K. A., et al. (2012). Ribosomal multilocus sequence typing: Universal
+				characterization of bacteria from domain to species. <i>Microbiology</i>,
+				<i>158</i>(4), 1005–1015.
+				<a href="https://doi.org/10.1099/mic.0.055459-0"
+					>https://doi.org/10.1099/mic.0.055459-0</a
+				>
+			</p>
+			<p>
+				Jolley, K. A., Bray, J. E., &amp; Maiden, M. C. J. (2018). Open-access bacterial
+				population genomics: BIGSdb software, the PubMLST.org website and their
+				applications.
+				<i>Wellcome Open Research</i>, <i>3</i>, Article 124.
+				<a href="https://doi.org/10.12688/wellcomeopenres.14826.1"
+					>https://doi.org/10.12688/wellcomeopenres.14826.1</a
+				>
+			</p>
+			<p>
+				Köster, J., &amp; Rahmann, S. (2012). Snakemake—A scalable bioinformatics workflow
+				engine. <i>Bioinformatics</i>, <i>28</i>(19), 2520–2522.
+				<a href="https://doi.org/10.1093/bioinformatics/bts480"
+					>https://doi.org/10.1093/bioinformatics/bts480</a
+				>
+			</p>
+			<p>
+				Mölder, F., et al. (2021). Sustainable data analysis with Snakemake.
+				<i>F1000Research</i>, <i>10</i>, Article 33.
+				<a href="https://doi.org/10.12688/f1000research.29032.2"
+					>https://doi.org/10.12688/f1000research.29032.2</a
+				>
+			</p>
+			<p>
+				Olson, R. D., et al. (2023). Introducing the Bacterial and Viral Bioinformatics
+				Resource Center (BV-BRC): A resource combining PATRIC, IRD and ViPR.
+				<i>Nucleic Acids Research</i>, <i>51</i>(D1), D678–D689.
+				<a href="https://doi.org/10.1093/nar/gkac1003">https://doi.org/10.1093/nar/gkac1003</a>
+			</p>
+			<p>
+				Pallets. (2023). <i>Flask</i> (Version 3.0) [Computer software].
+				<a href="https://flask.palletsprojects.com">https://flask.palletsprojects.com</a>
+			</p>
+			<p>
+				Seemann, T. (n.d.). <i>mlst</i> (Version 2.23) [Computer software]. GitHub.
+				<a href="https://github.com/tseemann/mlst">https://github.com/tseemann/mlst</a>
+			</p>
+		</div>
+	</body>
+</html>

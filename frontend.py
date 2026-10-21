@@ -97,13 +97,19 @@ app.config["MAX_CONTENT_LENGTH"] = None
 _APP_USERNAME = os.environ.get("APP_USERNAME", "mentor")
 _APP_PASSWORD = os.environ.get("APP_PASSWORD")
 
+# Reachable without the password: uptime monitoring, and the references page and
+# poster that the printed poster's QR code sends people to, with the one
+# stylesheet that page loads. None of these touches job data. Exact paths, not
+# prefixes, so nothing else under /static/ comes along.
+_PUBLIC_PATHS = frozenset({"/api/health", "/references", "/static/poster.pdf", "/static/style.css"})
+
 
 @app.before_request
 def _require_login():
 	"""Gate every route behind HTTP Basic Auth when APP_PASSWORD is configured."""
 	if not _APP_PASSWORD:
 		return
-	if request.path == "/api/health":
+	if request.path in _PUBLIC_PATHS:
 		return
 	basic_auth_credentials = request.authorization
 	if (
@@ -460,6 +466,11 @@ def analysis():
 		if databases_updated_at
 		else None,
 	)
+
+
+@app.route("/references")
+def references():
+	return render_template("references.html")
 
 
 @app.route("/job/new", methods=["POST"])
