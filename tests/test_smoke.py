@@ -100,6 +100,8 @@ class TestPages(Base):
 		self.assertIn("https://doi.org/10.1093/nar/gkac920", page)  # CARD 2023, first entry
 		self.assertIn("https://github.com/tseemann/mlst", page)  # mlst, last entry
 		self.assertIn('href="/static/poster.pdf"', page)
+		nav = page[page.index("<nav>") : page.index("</nav>")]
+		self.assertIn('href="/static/poster.pdf">Poster</a>', nav)
 
 	def test_index_shows_reference_database_age(self):
 		from datetime import datetime, timedelta, timezone

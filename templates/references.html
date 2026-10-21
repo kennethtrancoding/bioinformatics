@@ -8,7 +8,8 @@
 		<!-- Public even when APP_PASSWORD is set (see _PUBLIC_PATHS in frontend.py):
 		     the printed poster's QR code sends people here. -->
 		<nav>
-			<a href="{{ url_for('analysis') }}">Analysis</a> | <b>References</b>
+			<a href="{{ url_for('analysis') }}">Analysis</a> | <b>References</b> |
+			<a href="{{ url_for('static', filename='poster.pdf') }}">Poster</a>
 		</nav>
 
 		<h1>References</h1>
